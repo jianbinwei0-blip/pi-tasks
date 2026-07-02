@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
+- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, token counts, and per-task model cost
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
 - **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
@@ -49,7 +49,7 @@ The extension renders a persistent widget above the editor:
 ```
 ● 4 tasks (1 done, 1 in progress, 2 open)
   ✔ #1 Design the flux capacitor
-  ✳ #2 Acquiring plutonium… (2m 49s · ↑ 4.1k ↓ 1.2k)
+  ✳ #2 Acquiring plutonium… (2m 49s · ↑ 4.1k ↓ 1.2k · $0.03)
   ◻ #3 Install flux capacitor in DeLorean › blocked by #1
   ◻ #4 Test time travel at 88 mph › blocked by #2, #3
 ```
@@ -59,7 +59,7 @@ The extension renders a persistent widget above the editor:
 | `✔` | Completed (strikethrough + dim) |
 | `◼` | In-progress (not actively executing) |
 | `◻` | Pending |
-| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts) |
+| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts, and model cost when available) |
 
 ### Widget display settings
 
@@ -98,7 +98,7 @@ List all tasks with status, owner, and blocked-by info.
 
 ```
 #1 [pending] Fix authentication bug
-#2 [in_progress] Write unit tests (agent-1)
+#2 [in_progress] Write unit tests (agent-1) [$0.012]
 #3 [pending] Update docs [blocked by #1, #2]
 ```
 
@@ -117,7 +117,7 @@ Blocked by: #1
 Blocks: #3
 ```
 
-Shows owner (if set) and open (non-completed) dependency edges. Non-empty metadata is displayed as JSON.
+Shows owner (if set), open (non-completed) dependency edges, execution timing/tokens/cost when available, and non-empty metadata as JSON.
 
 ### `TaskUpdate`
 

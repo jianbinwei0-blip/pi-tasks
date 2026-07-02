@@ -11,7 +11,13 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
-import { isCompletedTaskExecutionStats, isTaskExecutionStats, type Task, type TaskExecutionStats } from "../types.js";
+import {
+  type CompletedTaskExecutionStats,
+  isCompletedTaskExecutionStats,
+  isTaskExecutionStats,
+  type Task,
+  type TaskExecutionStats,
+} from "../types.js";
 
 // ---- Truncation ----
 
@@ -47,11 +53,12 @@ const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", 
 
 const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
-/** Per-task runtime metrics (elapsed time, token usage). */
+/** Per-task runtime metrics (elapsed time, token usage, and model cost). */
 export interface TaskMetrics {
   startedAt: number;
   inputTokens: number;
   outputTokens: number;
+  costUsd: number;
 }
 
 /** Format milliseconds as a human-readable duration (e.g., "2m 49s", "1h 3m"). */
@@ -72,6 +79,15 @@ function formatTokens(n: number): string {
   return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
 }
 
+/** Format model cost in USD with useful precision for small per-task amounts. */
+function formatCostUsd(costUsd: number): string {
+  if (!Number.isFinite(costUsd) || costUsd === 0) return "$0";
+  const abs = Math.abs(costUsd);
+  if (abs < 0.01) return `$${costUsd.toFixed(4)}`;
+  if (abs < 1) return `$${costUsd.toFixed(3)}`;
+  return `$${costUsd.toFixed(2)}`;
+}
+
 /** Format a stable, human-readable clock time with second precision. */
 function formatClockTime(ms: number): string {
   return new Intl.DateTimeFormat("en-US", {
@@ -88,6 +104,7 @@ function formatLiveStats(theme: Theme, metrics: TaskMetrics | undefined): string
   const tokenParts: string[] = [];
   if (metrics.inputTokens > 0) tokenParts.push(`↑ ${formatTokens(metrics.inputTokens)}`);
   if (metrics.outputTokens > 0) tokenParts.push(`↓ ${formatTokens(metrics.outputTokens)}`);
+  if (metrics.costUsd > 0) tokenParts.push(formatCostUsd(metrics.costUsd));
 
   const statParts = [`started ${formatClockTime(metrics.startedAt)}`, elapsed, ...tokenParts];
   return ` ${theme.fg("dim", `(${statParts.join(" · ")})`)}`;
@@ -123,33 +140,39 @@ export class TaskWidget {
 
   /** Persist the fact that a task started even before it completes. */
   private persistStartMetrics(taskId: string, startedAt: number, existingStats?: TaskExecutionStats) {
+    const executionStats: TaskExecutionStats = {
+      ...existingStats,
+      startedAt,
+      inputTokens: existingStats?.inputTokens ?? 0,
+      outputTokens: existingStats?.outputTokens ?? 0,
+    };
+    if (existingStats?.costUsd !== undefined) {
+      executionStats.costUsd = existingStats.costUsd;
+    }
+
     this.store.update(taskId, {
-      metadata: {
-        executionStats: {
-          ...existingStats,
-          startedAt,
-          inputTokens: existingStats?.inputTokens ?? 0,
-          outputTokens: existingStats?.outputTokens ?? 0,
-        },
-      },
+      metadata: { executionStats },
     });
   }
 
   /** Infer a reasonable execution window for completed tasks that missed live tracking. */
-  private inferCompletedStats(task: Task, metrics?: TaskMetrics): Required<TaskExecutionStats> {
+  private inferCompletedStats(task: Task, metrics?: TaskMetrics): CompletedTaskExecutionStats {
     const existingStats = isTaskExecutionStats(task.metadata?.executionStats)
       ? task.metadata.executionStats
       : undefined;
     if (metrics) {
       const startedAt = existingStats?.startedAt ?? metrics.startedAt;
       const completedAt = existingStats?.completedAt ?? task.updatedAt;
-      return {
+      const stats: CompletedTaskExecutionStats = {
         startedAt,
         completedAt,
         durationMs: Math.max(0, completedAt - startedAt),
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
       };
+      const costUsd = metrics.costUsd > 0 ? metrics.costUsd : existingStats?.costUsd;
+      if (costUsd !== undefined) stats.costUsd = costUsd;
+      return stats;
     }
     if (isCompletedTaskExecutionStats(existingStats)) return existingStats;
 
@@ -200,6 +223,7 @@ export class TaskWidget {
           startedAt,
           inputTokens: existingStats?.inputTokens ?? 0,
           outputTokens: existingStats?.outputTokens ?? 0,
+          costUsd: existingStats?.costUsd ?? 0,
         });
         if (!existingStats) {
           this.persistStartMetrics(task.id, startedAt);
@@ -241,6 +265,7 @@ export class TaskWidget {
           startedAt,
           inputTokens: existingStats?.inputTokens ?? 0,
           outputTokens: existingStats?.outputTokens ?? 0,
+          costUsd: existingStats?.costUsd ?? 0,
         });
         if (!existingStats) {
           this.persistStartMetrics(taskId, startedAt);
@@ -255,14 +280,17 @@ export class TaskWidget {
     this.update();
   }
 
-  /** Record token usage for the currently active task(s). */
-  addTokenUsage(inputTokens: number, outputTokens: number) {
+  /** Record token usage and model cost for the currently active task(s). */
+  addTokenUsage(inputTokens: number, outputTokens: number, costUsd = 0) {
     // Distribute to all currently active tasks
     for (const id of this.activeTaskIds) {
       const m = this.metrics.get(id);
       if (m) {
         m.inputTokens += inputTokens;
         m.outputTokens += outputTokens;
+        if (Number.isFinite(costUsd) && costUsd > 0) {
+          m.costUsd += costUsd;
+        }
       }
     }
   }
@@ -353,6 +381,7 @@ export class TaskWidget {
             formatDuration(stats.durationMs),
             ...(stats.inputTokens > 0 ? [`↑ ${formatTokens(stats.inputTokens)}`] : []),
             ...(stats.outputTokens > 0 ? [`↓ ${formatTokens(stats.outputTokens)}`] : []),
+            ...(stats.costUsd !== undefined ? [formatCostUsd(stats.costUsd)] : []),
           ]
           : [];
         const statSuffix = statParts.length > 0 ? ` ${theme.fg("dim", `(${statParts.join(" · ")})`)}` : "";

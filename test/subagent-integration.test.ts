@@ -489,6 +489,26 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("#2");
   });
 
+  it("TaskList shows task cost when execution stats include cost", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Costed", description: "desc" });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "1",
+      metadata: {
+        executionStats: {
+          startedAt: 1_700_000_000_000,
+          completedAt: 1_700_000_065_000,
+          durationMs: 65_000,
+          inputTokens: 1200,
+          outputTokens: 400,
+          costUsd: 0.0123,
+        },
+      },
+    });
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toContain("#1 [pending] Costed [$0.012]");
+  });
+
   it("TaskGet works without subagents", async () => {
     await mock.executeTool("TaskCreate", { subject: "Read me", description: "details here" });
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
@@ -532,6 +552,7 @@ describe("Standalone operation (no subagents extension)", () => {
           durationMs: 65_000,
           inputTokens: 1200,
           outputTokens: 400,
+          costUsd: 0.0123,
         },
         note: "kept",
       },
@@ -542,8 +563,31 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("1m 5s");
     expect(result.content[0].text).toContain("↑ 1.2k");
     expect(result.content[0].text).toContain("↓ 400");
+    expect(result.content[0].text).toContain("$0.012");
     expect(result.content[0].text).toContain('Metadata: {"note":"kept"}');
     expect(result.content[0].text).not.toContain('"executionStats"');
+  });
+
+  it("turn_end usage cost is persisted into completed task stats", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Live cost", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+
+    await mock.fireLifecycle("turn_end", {
+      message: {
+        role: "assistant",
+        usage: {
+          input: 1000,
+          output: 500,
+          cost: { total: 0.0123 },
+        },
+      },
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("↑ 1k");
+    expect(result.content[0].text).toContain("↓ 500");
+    expect(result.content[0].text).toContain("$0.012");
   });
 
   it("TaskGet leaves malformed execution stats in raw metadata", async () => {

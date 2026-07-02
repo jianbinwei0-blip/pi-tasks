@@ -10,13 +10,21 @@ export interface TaskExecutionStats {
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  costUsd?: number;
 }
+
+export type CompletedTaskExecutionStats = TaskExecutionStats & {
+  completedAt: number;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+};
 
 export function isTaskExecutionStats(value: unknown): value is TaskExecutionStats {
   if (!value || typeof value !== "object") return false;
   const stats = value as Record<string, unknown>;
   if (typeof stats.startedAt !== "number" || !Number.isFinite(stats.startedAt)) return false;
-  for (const key of ["completedAt", "durationMs", "inputTokens", "outputTokens"] as const) {
+  for (const key of ["completedAt", "durationMs", "inputTokens", "outputTokens", "costUsd"] as const) {
     if (stats[key] !== undefined && (typeof stats[key] !== "number" || !Number.isFinite(stats[key]))) {
       return false;
     }
@@ -24,7 +32,7 @@ export function isTaskExecutionStats(value: unknown): value is TaskExecutionStat
   return true;
 }
 
-export function isCompletedTaskExecutionStats(value: unknown): value is Required<TaskExecutionStats> {
+export function isCompletedTaskExecutionStats(value: unknown): value is CompletedTaskExecutionStats {
   if (!isTaskExecutionStats(value)) return false;
   const stats = value as TaskExecutionStats;
   return [stats.completedAt, stats.durationMs, stats.inputTokens, stats.outputTokens]

@@ -63,6 +63,29 @@ function formatTokens(n: number): string {
   return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
 }
 
+function formatCostUsd(costUsd: number): string {
+  if (!Number.isFinite(costUsd) || costUsd === 0) return "$0";
+  const abs = Math.abs(costUsd);
+  if (abs < 0.01) return `$${costUsd.toFixed(4)}`;
+  if (abs < 1) return `$${costUsd.toFixed(3)}`;
+  return `$${costUsd.toFixed(2)}`;
+}
+
+function extractUsageCost(usage: any): number {
+  const cost = usage?.cost;
+  if (typeof cost === "number" && Number.isFinite(cost)) return cost;
+  const total = cost?.total;
+  return typeof total === "number" && Number.isFinite(total) ? total : 0;
+}
+
+function formatExecutionUsageParts(stats: { inputTokens?: number; outputTokens?: number; costUsd?: number }): string[] {
+  const parts: string[] = [];
+  if ((stats.inputTokens ?? 0) > 0) parts.push(`↑ ${formatTokens(stats.inputTokens ?? 0)}`);
+  if ((stats.outputTokens ?? 0) > 0) parts.push(`↓ ${formatTokens(stats.outputTokens ?? 0)}`);
+  if (stats.costUsd !== undefined) parts.push(formatCostUsd(stats.costUsd));
+  return parts;
+}
+
 function formatClockTime(ms: number): string {
   return new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
@@ -345,12 +368,12 @@ export default function (pi: ExtensionAPI) {
     if (autoClear.onTurnStart(cadence.currentTurn)) widget.update();
   });
 
-  // ── Token usage tracking ──
-  // Feed per-turn token counts from assistant messages into the widget.
+  // ── Usage tracking ──
+  // Feed per-turn token counts and model cost from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
-      widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
+      widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0, extractUsageCost(msg.usage));
     }
   });
 
@@ -566,6 +589,13 @@ Use TaskGet with a specific task ID to view full details including description a
           line += ` (${task.owner})`;
         }
 
+        const stats = isTaskExecutionStats(task.metadata.executionStats)
+          ? task.metadata.executionStats
+          : undefined;
+        if (stats?.costUsd !== undefined) {
+          line += ` [${formatCostUsd(stats.costUsd)}]`;
+        }
+
         // Only show non-completed blockers
         if (task.blockedBy.length > 0) {
           const openBlockers = task.blockedBy.filter(bid => {
@@ -652,17 +682,19 @@ Returns full task details:
         ? task.metadata.executionStats
         : undefined;
       if (completedStats) {
-        const tokenParts: string[] = [];
-        if ((completedStats.inputTokens ?? 0) > 0) tokenParts.push(`↑ ${formatTokens(completedStats.inputTokens ?? 0)}`);
-        if ((completedStats.outputTokens ?? 0) > 0) tokenParts.push(`↓ ${formatTokens(completedStats.outputTokens ?? 0)}`);
-        lines.push(
-          `Execution stats: started ${formatClockTime(completedStats.startedAt)} · ` +
-          `ended ${formatClockTime(completedStats.completedAt ?? 0)} · ` +
-          `${formatDuration(completedStats.durationMs ?? 0)}` +
-          (tokenParts.length > 0 ? ` · ${tokenParts.join(" ")}` : "")
-        );
+        const statParts = [
+          `started ${formatClockTime(completedStats.startedAt)}`,
+          `ended ${formatClockTime(completedStats.completedAt ?? 0)}`,
+          formatDuration(completedStats.durationMs ?? 0),
+          ...formatExecutionUsageParts(completedStats),
+        ];
+        lines.push(`Execution stats: ${statParts.join(" · ")}`);
       } else if (executionStats) {
-        lines.push(`Execution stats: started ${formatClockTime(executionStats.startedAt)}`);
+        const statParts = [
+          `started ${formatClockTime(executionStats.startedAt)}`,
+          ...formatExecutionUsageParts(executionStats),
+        ];
+        lines.push(`Execution stats: ${statParts.join(" · ")}`);
       }
 
       // Show metadata if non-empty. When execution stats are valid, render them separately.
@@ -1105,9 +1137,13 @@ Set up task dependencies:
           }
         };
 
-        const choices = tasks.map(t =>
-          `${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}`
-        );
+        const choices = tasks.map((t) => {
+          const stats = isTaskExecutionStats(t.metadata.executionStats)
+            ? t.metadata.executionStats
+            : undefined;
+          const costSuffix = stats?.costUsd !== undefined ? ` · ${formatCostUsd(stats.costUsd)}` : "";
+          return `${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}`;
+        });
         choices.push("← Back");
 
         const selected = await ui.select("Tasks", choices);

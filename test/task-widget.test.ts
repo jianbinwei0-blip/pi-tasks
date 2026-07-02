@@ -534,6 +534,28 @@ describe("TaskWidget", () => {
     expect(activeLine).toContain("↓ 800");
   });
 
+  it("tracks and renders model cost for active and completed tasks", () => {
+    store.create("Costed task", "Desc", "Running costed work");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    widget.addTokenUsage(1000, 500, 0.0123);
+
+    let lines = renderWidget(ui.state);
+    let taskLine = lines.find(l => l.includes("Running costed work…"));
+    expect(taskLine).toContain("$0.012");
+
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      costUsd: 0.0123,
+    });
+    lines = renderWidget(ui.state);
+    taskLine = lines.find(l => l.includes("Costed task"));
+    expect(taskLine).toContain("$0.012");
+  });
+
   it("preserves persisted start time and tokens when a resumed task becomes active", () => {
     vi.setSystemTime(new Date("2026-04-13T15:06:00Z"));
     store.create("Resumed active", "Desc", "Continuing", {
@@ -541,18 +563,20 @@ describe("TaskWidget", () => {
         startedAt: Date.parse("2026-04-13T15:04:00Z"),
         inputTokens: 1000,
         outputTokens: 500,
+        costUsd: 0.0042,
       },
     });
     store.update("1", { status: "in_progress" });
 
     widget.setActiveTask("1", true);
-    widget.addTokenUsage(250, 125);
+    widget.addTokenUsage(250, 125, 0.0021);
 
     const lines = renderWidget(ui.state);
     const activeLine = lines.find(l => l.includes("Continuing…"));
     expect(activeLine).toContain("2m");
     expect(activeLine).toContain("↑ 1.3k");
     expect(activeLine).toContain("↓ 625");
+    expect(activeLine).toContain("$0.0063");
 
     store.update("1", { status: "completed" });
     widget.setActiveTask("1", false);
@@ -561,6 +585,7 @@ describe("TaskWidget", () => {
       startedAt: Date.parse("2026-04-13T15:04:00Z"),
       inputTokens: 1250,
       outputTokens: 625,
+      costUsd: 0.0063,
     });
   });
 

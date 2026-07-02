@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Per-task model cost display** — task execution stats now capture `usage.cost.total` from pi assistant turns and show the resulting USD cost in the persistent widget, `TaskList`, and `TaskGet` whenever cost data is available.
+
 ### Changed
 - **Direct GitHub install support for the fork** — package metadata and install docs now point at `jianbinwei0-blip/pi-tasks`, with `pi install https://github.com/jianbinwei0-blip/pi-tasks` as the primary install path.
 

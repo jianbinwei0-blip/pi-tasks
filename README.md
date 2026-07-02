@@ -1,10 +1,10 @@
-# @tintinweb/pi-tasks
+# @jianbinwei0-blip/pi-tasks
 
 A [pi](https://pi.dev) extension that brings **Claude Code-style task tracking and coordination** to pi. Track multi-step work with structured tasks, dependency management, and a persistent visual widget.
 
 > **Status:** Early release.
 
-<img width="600" alt="pi-tasks screenshot" src="https://github.com/tintinweb/pi-tasks/raw/master/media/screenshot.png" />
+<img width="600" alt="pi-tasks screenshot" src="https://github.com/jianbinwei0-blip/pi-tasks/raw/master/media/screenshot.png" />
 
 https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
@@ -24,8 +24,16 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
 ## Install
 
+Install this repository directly from GitHub:
+
 ```bash
-pi install npm:@tintinweb/pi-tasks
+pi install https://github.com/jianbinwei0-blip/pi-tasks
+```
+
+Equivalent Git shorthand:
+
+```bash
+pi install git:github.com/jianbinwei0-blip/pi-tasks
 ```
 
 Or load directly for development:
@@ -261,14 +269,14 @@ Tasks
 
 ## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
 
-[`pi-tasks`](https://github.com/tintinweb/pi-tasks) communicates with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) via pi's eventbus using a scoped request/reply RPC protocol. No shared global state — just events.
+[`pi-tasks`](https://github.com/jianbinwei0-blip/pi-tasks) communicates with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) via pi's eventbus using a scoped request/reply RPC protocol. No shared global state — just events.
 
 ### Presence Detection
 
 Load order doesn't matter. Two handshake paths ensure detection regardless of which extension loads first:
 
-1. **Ping on init** — [`pi-tasks`](https://github.com/tintinweb/pi-tasks) emits `subagents:rpc:ping` with a unique `requestId` and listens for `subagents:rpc:ping:reply:{requestId}`. If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is already loaded, it replies immediately.
-2. **Ready broadcast** — [`pi-subagents`](https://github.com/tintinweb/pi-subagents) emits `subagents:ready` when it initializes. If [`pi-tasks`](https://github.com/tintinweb/pi-tasks) loaded first, it picks this up.
+1. **Ping on init** — [`pi-tasks`](https://github.com/jianbinwei0-blip/pi-tasks) emits `subagents:rpc:ping` with a unique `requestId` and listens for `subagents:rpc:ping:reply:{requestId}`. If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is already loaded, it replies immediately.
+2. **Ready broadcast** — [`pi-subagents`](https://github.com/tintinweb/pi-subagents) emits `subagents:ready` when it initializes. If [`pi-tasks`](https://github.com/jianbinwei0-blip/pi-tasks) loaded first, it picks this up.
 
 ```
 ┌─────────────┐                    ┌──────────────────┐
@@ -298,7 +306,7 @@ The returned `id` is stored in an in-memory `agentTaskMap` (agentId → taskId) 
 
 ### Lifecycle Events
 
-[`pi-subagents`](https://github.com/tintinweb/pi-subagents) emits lifecycle events that [`pi-tasks`](https://github.com/tintinweb/pi-tasks) listens to:
+[`pi-subagents`](https://github.com/tintinweb/pi-subagents) emits lifecycle events that [`pi-tasks`](https://github.com/jianbinwei0-blip/pi-tasks) listens to:
 
 | Event | Payload | Action |
 |-------|---------|--------|
@@ -338,4 +346,4 @@ npm test            # Run unit tests
 
 ## License
 
-MIT — [tintinweb](https://github.com/tintinweb)
+MIT — originally by [tintinweb](https://github.com/tintinweb), fork maintained at [jianbinwei0-blip/pi-tasks](https://github.com/jianbinwei0-blip/pi-tasks)

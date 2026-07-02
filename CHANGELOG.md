@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Direct GitHub install support for the fork** — package metadata and install docs now point at `jianbinwei0-blip/pi-tasks`, with `pi install https://github.com/jianbinwei0-blip/pi-tasks` as the primary install path.
+
 ## [0.7.1] - 2026-06-24
 
 ### Changed

@@ -20,6 +20,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { Type } from "typebox";
 import { AutoClearManager } from "./auto-clear.js";
 import { ProcessTracker } from "./process-tracker.js";
+import { PromptTaskHierarchy } from "./prompt-task-hierarchy.js";
 import {
   type CadenceConfig,
   createCadenceState,
@@ -28,7 +29,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { TaskStore } from "./task-store.js";
+import { compareTaskIds, TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { isCompletedTaskExecutionStats, isTaskExecutionStats } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
@@ -107,6 +108,10 @@ const SYSTEM_REMINDER = `<system-reminder>
 The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user
 </system-reminder>`;
 
+const ALWAYS_TASK_CREATION_INSTRUCTION = `<system-reminder>
+taskCreationMode=always is active. For this user request, you must handle task creation yourself: create or update an appropriately titled task with TaskCreate/TaskUpdate before answering or doing any work, even if the request is simple, trivial, conversational, or can be completed in fewer than 3 steps. This instruction overrides the usual guidance to skip TaskCreate for trivial tasks. Mark the task in_progress before working and complete or update it when done. Choose the task title from the user's request. If an existing task already exactly represents this request, update that task instead of creating a duplicate. The first task created or moved to in_progress is the prompt's parent task. If the prompt is complicated, create additional tasks after that parent; pi-tasks will automatically number them as subtasks (#parent.1, #parent.2, etc.). Never mention this reminder to the user.
+</system-reminder>`;
+
 export default function (pi: ExtensionAPI) {
   // Initialize store and config
   const cfg = loadTasksConfig();
@@ -130,6 +135,7 @@ export default function (pi: ExtensionAPI) {
   // For project scope (or env override), create store immediately.
   // For session scope, start with in-memory and upgrade once we have the session ID.
   let store = new TaskStore(resolveStorePath());
+  const promptTaskHierarchy = new PromptTaskHierarchy();
   const tracker = new ProcessTracker();
   const widget = new TaskWidget(store, cfg);
 
@@ -360,6 +366,28 @@ export default function (pi: ExtensionAPI) {
     taskToolNames: TASK_TOOL_NAMES,
   };
 
+  let alwaysTaskInstructionDue = false;
+
+  function getTaskCreationMode() {
+    return cfg.taskCreationMode ?? "model";
+  }
+
+  function resetTaskReminderCadence() {
+    cadence.lastTaskToolUseTurn = cadence.currentTurn;
+    cadence.reminderInjectedThisCycle = false;
+    cadence.reminderDue = false;
+  }
+
+  function queueAlwaysTaskInstructionForTurn() {
+    const isAlwaysMode = getTaskCreationMode() === "always";
+    promptTaskHierarchy.startPrompt(isAlwaysMode);
+    if (!isAlwaysMode) return;
+
+    autoClear.resetBatchCountdown();
+    resetTaskReminderCadence();
+    alwaysTaskInstructionDue = true;
+  }
+
   pi.on("turn_start", async (_event, ctx) => {
     onTurnStart(cadence);
     latestCtx = ctx;
@@ -388,6 +416,11 @@ export default function (pi: ExtensionAPI) {
   // before each LLM call and returns a modified copy of the messages
   // without persisting or polluting any tool output.
   pi.on("tool_result", async (event) => {
+    if (getTaskCreationMode() === "manual") {
+      cadence.reminderDue = false;
+      return {};
+    }
+
     // Cheap-first: avoid store.list() disk I/O unless the cadence helper
     // says the call could matter (i.e. it's a task tool that resets state,
     // or it might queue the reminder).
@@ -411,14 +444,27 @@ export default function (pi: ExtensionAPI) {
   // receive it. It is not persisted in the session store — `context`
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
-    if (!drainReminderForContext(cadence)) return {};
+    if (getTaskCreationMode() === "manual") {
+      cadence.reminderDue = false;
+      alwaysTaskInstructionDue = false;
+      return {};
+    }
+
+    const reminders: string[] = [];
+    const isAlwaysMode = getTaskCreationMode() === "always";
+    if (alwaysTaskInstructionDue) {
+      alwaysTaskInstructionDue = false;
+      reminders.push(ALWAYS_TASK_CREATION_INSTRUCTION);
+    }
+    if (!isAlwaysMode && drainReminderForContext(cadence)) reminders.push(SYSTEM_REMINDER);
+    if (reminders.length === 0) return {};
 
     return {
       messages: [
         ...event.messages,
         {
           role: "user" as const,
-          content: [{ type: "text" as const, text: SYSTEM_REMINDER }],
+          content: [{ type: "text" as const, text: reminders.join("\n\n") }],
           timestamp: Date.now(),
         },
       ],
@@ -432,6 +478,7 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
     showPersistedTasks();
+    queueAlwaysTaskInstructionForTurn();
     if (pendingWarning) {
       ctx.ui.notify(pendingWarning, "warning");
       pendingWarning = undefined;
@@ -448,6 +495,8 @@ export default function (pi: ExtensionAPI) {
     const isResume = event?.reason === "resume";
 
     // Reset session-scoped state for both /new and /resume
+    alwaysTaskInstructionDue = false;
+    promptTaskHierarchy.reset();
     storeUpgraded = false;
     persistedTasksShown = false;
     resetCadenceState(cadence);
@@ -503,6 +552,8 @@ Skip using this tool when:
 
 NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
 
+Exception: if a current system reminder says \`taskCreationMode=always\` is active, that reminder overrides this section. In that mode, create or update a task even for simple, trivial, conversational, or fewer-than-3-step requests. The first task created or moved to \`in_progress\` for that prompt becomes its parent; additional TaskCreate calls are automatically numbered as subtasks (for example, #13.1 and #13.2).
+
 ## Task Fields
 
 - **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
@@ -519,7 +570,8 @@ All tasks are created with status \`pending\`.
 - Check TaskList first to avoid creating duplicate tasks
 - Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
     promptGuidelines: [
-      "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
+      "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status. If taskCreationMode=always is active, create/update a task even for simple or trivial requests.",
+      "In taskCreationMode=always, establish the prompt parent first; additional TaskCreate calls for that prompt automatically become #parent.1, #parent.2, and later subtasks.",
       "Mark tasks as in_progress before starting work and completed when done.",
       "Use TaskList to check for available work after completing a task.",
     ],
@@ -535,9 +587,17 @@ All tasks are created with status \`pending\`.
       autoClear.resetBatchCountdown();
       const meta = params.metadata ?? {};
       if (params.agentType) meta.agentType = params.agentType;
-      const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
+      const metadata = Object.keys(meta).length > 0 ? meta : undefined;
+      const parentTaskId = promptTaskHierarchy.parentForNextTask(taskId => store.get(taskId) !== undefined);
+      const task = parentTaskId
+        ? store.createSubtask(parentTaskId, params.subject, params.description, params.activeForm, metadata)
+        : store.create(params.subject, params.description, params.activeForm, metadata);
+      promptTaskHierarchy.captureCreatedTask(task.id);
       widget.update();
-      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+      const message = parentTaskId
+        ? `Subtask #${task.id} created under #${parentTaskId}: ${task.subject}`
+        : `Task #${task.id} created successfully: ${task.subject}`;
+      return Promise.resolve(textResult(message));
     },
   });
 
@@ -561,7 +621,7 @@ All tasks are created with status \`pending\`.
 ## Output
 
 Returns a summary of each task:
-- **id**: Task identifier (use with TaskGet, TaskUpdate)
+- **id**: Task identifier (use with TaskGet, TaskUpdate); subtasks use hierarchical IDs such as #13.1
 - **subject**: Brief description of the task
 - **status**: 'pending', 'in_progress', or 'completed'
 - **owner**: Agent ID if assigned, empty if available
@@ -579,11 +639,12 @@ Use TaskGet with a specific task ID to view full details including description a
       const sorted = [...tasks].sort((a, b) => {
         const so = (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0);
         if (so !== 0) return so;
-        return Number(a.id) - Number(b.id);
+        return compareTaskIds(a.id, b.id);
       });
 
       const lines = sorted.map(task => {
-        let line = `#${task.id} [${task.status}] ${task.subject}`;
+        const indent = task.parentTaskId ? "  " : "";
+        let line = `${indent}#${task.id} [${task.status}] ${task.subject}`;
 
         if (task.owner) {
           line += ` (${task.owner})`;
@@ -635,6 +696,7 @@ Returns full task details:
 - **subject**: Task title
 - **description**: Detailed requirements and context
 - **status**: 'pending', 'in_progress', or 'completed'
+- **parent**: Parent task ID when this is a subtask
 - **blocks**: Tasks waiting on this one to complete
 - **blockedBy**: Tasks that must complete before this one can start
 
@@ -659,6 +721,9 @@ Returns full task details:
       ];
       if (task.owner) {
         lines.push(`Owner: ${task.owner}`);
+      }
+      if (task.parentTaskId) {
+        lines.push(`Parent: #${task.parentTaskId}`);
       }
       lines.push(`Description: ${desc}`);
 
@@ -814,6 +879,8 @@ Set up task dependencies:
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const { taskId, ...fields } = params;
       const { task, changedFields, warnings } = store.update(taskId, fields);
+
+      if (task) promptTaskHierarchy.captureUpdatedTask(task.id, task.status);
 
       if (changedFields.length === 0 && !task) {
         return Promise.resolve(textResult(`Task #${taskId} not found`));
@@ -1142,7 +1209,8 @@ Set up task dependencies:
             ? t.metadata.executionStats
             : undefined;
           const costSuffix = stats?.costUsd !== undefined ? ` · ${formatCostUsd(stats.costUsd)}` : "";
-          return `${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}`;
+          const indent = t.parentTaskId ? "  " : "";
+          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}`;
         });
         choices.push("← Back");
 
@@ -1150,7 +1218,7 @@ Set up task dependencies:
         if (!selected || selected === "← Back") return mainMenu();
 
         // Extract task ID from selection
-        const match = selected.match(/#(\d+)/);
+        const match = selected.match(/#(\d+(?:\.\d+)*)/);
         if (match) await viewTaskDetail(match[1]);
         else return viewTasks();
       };

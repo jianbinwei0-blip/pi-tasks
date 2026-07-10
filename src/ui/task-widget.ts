@@ -340,6 +340,7 @@ export class TaskWidget {
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
+      const indent = task.parentTaskId ? "    " : "  ";
 
       let icon: string;
       if (isActive) {
@@ -369,7 +370,7 @@ export class TaskWidget {
         const agentId = task.metadata?.agentId;
         const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
         const stats = formatLiveStats(theme, this.metrics.get(task.id));
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
+        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
       } else if (task.status === "completed") {
         const stats = isCompletedTaskExecutionStats(task.metadata.executionStats)
           ? task.metadata.executionStats
@@ -385,7 +386,7 @@ export class TaskWidget {
           ]
           : [];
         const statSuffix = statParts.length > 0 ? ` ${theme.fg("dim", `(${statParts.join(" · ")})`)}` : "";
-        text = `  ${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}${statSuffix}`;
+        text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}${statSuffix}`;
       } else {
         const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
@@ -393,7 +394,7 @@ export class TaskWidget {
         const stats = task.status === "in_progress"
           ? formatLiveStats(theme, this.metrics.get(task.id))
           : "";
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${stats}`;
+        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${stats}`;
       }
 
       lines.push(truncate(text + suffix));

@@ -41,6 +41,16 @@ export async function openSettingsMenu(
         values: ["memory", "session", "project"],
       },
       {
+        id: "taskCreationMode",
+        label: "Prompt task creation",
+        description:
+          "model: let the agent decide when task tracking helps. " +
+          "manual: never inject task reminders or create prompt tasks automatically. " +
+          "always: create one prompt-level in-progress task for every user prompt and complete it when the agent turn ends.",
+        currentValue: cfg.taskCreationMode ?? "model",
+        values: ["model", "manual", "always"],
+      },
+      {
         id: "autoCascade",
         label: "Auto-execute with agents",
         description:
@@ -103,6 +113,10 @@ export async function openSettingsMenu(
       /* maxVisible */ 10,
       getSettingsListTheme(),
       /* onChange */ (id, newValue) => {
+        if (id === "taskCreationMode") {
+          cfg.taskCreationMode = newValue as TasksConfig["taskCreationMode"];
+          saveTasksConfig(cfg);
+        }
         if (id === "autoCascade") {
           cfg.autoCascade = newValue === "on";
           saveTasksConfig(cfg);

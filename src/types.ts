@@ -41,6 +41,8 @@ export function isCompletedTaskExecutionStats(value: unknown): value is Complete
 
 export interface Task {
   id: string;
+  /** Parent task for prompt-scoped subtasks (for example, #13 for #13.1). */
+  parentTaskId?: string;
   subject: string;
   description: string;
   status: TaskStatus;
@@ -56,6 +58,8 @@ export interface Task {
 /** Serialized store format on disk. */
 export interface TaskStoreData {
   nextId: number;
+  /** Next direct-child ordinal per parent. Optional for legacy store files. */
+  nextSubtaskIds?: Record<string, number>;
   tasks: Task[];
 }
 

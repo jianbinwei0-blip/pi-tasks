@@ -15,6 +15,8 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
 - **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, token counts, and per-task model cost
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
+- **Prompt task creation modes** — choose model-discretionary task creation, manual-only task tracking, or required model-owned task creation for every user prompt
+- **Prompt-scoped subtasks** — in `always` mode, extra tasks created for a complex prompt are nested under its prompt task as `#13.1`, `#13.2`, and so on instead of consuming `#14`, `#15`, …
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
 - **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
 - **Shared task lists** — multiple pi sessions can share a file-backed task list for agent team coordination
@@ -63,7 +65,7 @@ The extension renders a persistent widget above the editor:
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved to `.pi/tasks-config.json`). All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (project override) or JSON files. All defaults preserve the original behaviour.
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
@@ -92,6 +94,16 @@ Create a structured task. Used proactively for complex multi-step work.
 → Task #1 created successfully: Fix authentication bug
 ```
 
+In `taskCreationMode: "always"`, the first task created (or existing task moved to `in_progress`) becomes the current prompt's parent. Additional `TaskCreate` calls during that prompt are automatic subtasks:
+
+```
+→ Task #13 created successfully: Build authentication flow
+→ Subtask #13.1 created under #13: Implement token validation
+→ Subtask #13.2 created under #13: Add authentication tests
+```
+
+The next user prompt starts a new top-level task (`#14`); subtask creation does not consume top-level IDs.
+
 ### `TaskList`
 
 List all tasks with status, owner, and blocked-by info.
@@ -109,12 +121,13 @@ Sort order: pending first, then in-progress, then completed (each group by ID).
 Get full details for a specific task.
 
 ```
-Task #2: Write unit tests
+Task #13.1: Write unit tests
 Status: in_progress
 Owner: agent-1
+Parent: #13
 Description: Add tests for the auth module
-Blocked by: #1
-Blocks: #3
+Blocked by: #13
+Blocks: #13.2
 ```
 
 Shows owner (if set), open (non-completed) dependency edges, execution timing/tokens/cost when available, and non-empty metadata as JSON.
@@ -189,7 +202,17 @@ pending → in_progress → completed
                       → deleted (permanently removed)
 ```
 
-Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset.
+Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — top-level and per-parent subtask IDs never reset while the task store remains intact.
+
+## Prompt Task Creation Modes
+
+`taskCreationMode` controls whether pi-tasks creates prompt-level tasks itself or leaves task creation entirely to the agent/user. Configure it via pi-extmgr package configuration, `/tasks` → Settings (project), `<cwd>/.pi/tasks-config.json`, or `~/.pi/agent/extensions/pi-tasks.json`.
+
+| Mode | Behaviour |
+|------|-----------|
+| `model` **(default)** | Current behaviour: the agent decides when to call `TaskCreate`; reminder nudges can still appear when existing tasks go stale. |
+| `manual` | No prompt-level auto tasks and no reminder injection. Manual `/tasks` actions and task tools remain available. |
+| `always` | At every user prompt, inject a strong transient instruction requiring the model to create or update an appropriately titled task with `TaskCreate` / `TaskUpdate`, even for simple/trivial/conversational requests. The instruction overrides the usual "skip trivial tasks" guidance. The first task created or moved to `in_progress` becomes the prompt parent; later `TaskCreate` calls during that prompt become `#parent.1`, `#parent.2`, … subtasks. The next prompt resets the parent and resumes top-level numbering. |
 
 ## Dependency Management
 
@@ -223,7 +246,27 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `taskCreationMode`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) can be set globally in `~/.pi/agent/extensions/pi-tasks.json` and overridden per project via `/tasks` → Settings (saved to `<cwd>/.pi/tasks-config.json`). `taskCreationMode` can also be configured through pi-extmgr's package configuration panel.
+
+### Configuration files
+
+Use global extension config for defaults across projects:
+
+```json
+// ~/.pi/agent/extensions/pi-tasks.json
+{
+  "taskCreationMode": "always",
+  "taskScope": "session",
+  "autoCascade": false,
+  "autoClearCompleted": "on_list_complete",
+  "sortOrder": "id",
+  "maxVisible": 10,
+  "showAll": false,
+  "hiddenAt": "bottom"
+}
+```
+
+Project config at `<cwd>/.pi/tasks-config.json` uses the same shape and overrides the global extension config. For compatibility, `~/.pi/agent/extensions/tasks-config.json` is also read as a legacy global defaults file.
 
 ### Override via environment variables
 
@@ -248,6 +291,16 @@ export PI_TASKS=off
 export PI_TASKS=my-project
 ```
 
+## pi-extmgr Configuration
+
+pi-tasks does not register its own `/extensions` command. When [pi-extmgr](https://www.npmjs.com/package/pi-extmgr) owns `/extensions`, select the pi-tasks package, press `c` to configure it, then set **Prompt task creation** to one of:
+
+- `model` — model decides when task tracking helps
+- `manual` — no prompt-level auto tasks or reminder injection
+- `always` — require the model to create or update an appropriately titled task for every user prompt, even simple ones
+
+Save in pi-extmgr and reload Pi for package setting changes to take effect. Project-specific `<cwd>/.pi/tasks-config.json` settings still take precedence.
+
 ## `/tasks` Command
 
 Interactive menu:
@@ -265,7 +318,9 @@ Tasks
 - **Create task** — input prompts for subject and description
 - **Clear completed** — remove all completed tasks
 - **Clear all** — remove all tasks regardless of status
-- **Settings** — configure task storage, auto-cascade, auto-clear completed tasks, and [widget display](#widget-display-settings) (sort order, max visible, show all, hidden position) — saved to `tasks-config.json`
+- **Settings** — configure task storage, prompt task creation mode, auto-cascade, auto-clear completed tasks, and [widget display](#widget-display-settings) (sort order, max visible, show all, hidden position) — saved to the project `tasks-config.json`
+
+Use pi-extmgr package configuration for package-level `taskCreationMode`; use `/tasks` → Settings for project-specific overrides.
 
 ## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
 
@@ -325,8 +380,9 @@ src/
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
-├── tasks-config.ts     # Config persistence (taskScope, autoCascade, autoClearCompleted) → .pi/tasks-config.json
+├── tasks-config.ts     # Config loading/saving (global defaults + pi-extmgr settings + project tasks-config.json)
 ├── process-tracker.ts  # Background process output buffering and stop
+├── prompt-task-hierarchy.ts  # Tracks each always-mode prompt parent for automatic subtasks
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner
     └── settings-menu.ts  # /tasks → Settings panel (SettingsList TUI component)

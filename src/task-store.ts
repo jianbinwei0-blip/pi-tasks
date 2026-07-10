@@ -10,21 +10,39 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { Task, TaskStatus, TaskStoreData } from "./types.js";
 
+const HIERARCHICAL_TASK_ID = /^\d+(?:\.\d+)*$/;
+
+/** Compare IDs by numeric path segment: #1, #1.1, #1.2, #1.10, #2. */
+export function compareTaskIds(left: string, right: string): number {
+  if (!HIERARCHICAL_TASK_ID.test(left) || !HIERARCHICAL_TASK_ID.test(right)) {
+    return left.localeCompare(right, "en", { numeric: true });
+  }
+
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  const sharedLength = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < sharedLength; index++) {
+    const difference = leftParts[index] - rightParts[index];
+    if (difference !== 0) return difference;
+  }
+  return leftParts.length - rightParts.length;
+}
+
 function sortById(a: Task, b: Task): number {
-  return Number(a.id) - Number(b.id);
+  return compareTaskIds(a.id, b.id);
 }
 
 function sortByStatus(a: Task, b: Task): number {
   const rank = (s: string) => s === "completed" ? 0 : s === "in_progress" ? 1 : 2;
-  return rank(a.status) - rank(b.status) || Number(a.id) - Number(b.id);
+  return rank(a.status) - rank(b.status) || compareTaskIds(a.id, b.id);
 }
 
 function sortByRecent(a: Task, b: Task): number {
-  return b.updatedAt - a.updatedAt || Number(b.id) - Number(a.id);
+  return b.updatedAt - a.updatedAt || compareTaskIds(b.id, a.id);
 }
 
 function sortByOldest(a: Task, b: Task): number {
-  return a.updatedAt - b.updatedAt || Number(a.id) - Number(b.id);
+  return a.updatedAt - b.updatedAt || compareTaskIds(a.id, b.id);
 }
 
 const SORT_FNS = { id: sortById, status: sortByStatus, recent: sortByRecent, oldest: sortByOldest };
@@ -75,6 +93,7 @@ export class TaskStore {
 
   // In-memory state (always kept in sync)
   private nextId = 1;
+  private nextSubtaskIds = new Map<string, number>();
   private tasks = new Map<string, Task>();
 
   constructor(listIdOrPath?: string) {
@@ -94,11 +113,38 @@ export class TaskStore {
     try {
       const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
       this.nextId = data.nextId;
+      this.nextSubtaskIds.clear();
+      for (const [parentTaskId, nextId] of Object.entries(data.nextSubtaskIds ?? {})) {
+        if (Number.isSafeInteger(nextId) && nextId > 0) {
+          this.nextSubtaskIds.set(parentTaskId, nextId);
+        }
+      }
       this.tasks.clear();
       for (const t of data.tasks) {
         this.tasks.set(t.id, t);
       }
+      this.reconcileSubtaskState();
     } catch { /* corrupt file — start fresh */ }
+  }
+
+  /** Infer legacy parent links and ensure child counters advance past stored IDs. */
+  private reconcileSubtaskState(): void {
+    for (const task of this.tasks.values()) {
+      const separator = task.id.lastIndexOf(".");
+      const inferredParentId = separator > 0 ? task.id.slice(0, separator) : undefined;
+      if (!task.parentTaskId && inferredParentId && this.tasks.has(inferredParentId)) {
+        task.parentTaskId = inferredParentId;
+      }
+
+      const parentTaskId = task.parentTaskId;
+      if (!parentTaskId || !task.id.startsWith(`${parentTaskId}.`)) continue;
+      const ordinalText = task.id.slice(parentTaskId.length + 1);
+      if (!/^\d+$/.test(ordinalText)) continue;
+      const nextId = Number(ordinalText) + 1;
+      if (nextId > (this.nextSubtaskIds.get(parentTaskId) ?? 1)) {
+        this.nextSubtaskIds.set(parentTaskId, nextId);
+      }
+    }
   }
 
   /** Write store to disk atomically (file-backed mode only). */
@@ -106,6 +152,7 @@ export class TaskStore {
     if (!this.filePath) return;
     const data: TaskStoreData = {
       nextId: this.nextId,
+      nextSubtaskIds: Object.fromEntries(this.nextSubtaskIds),
       tasks: Array.from(this.tasks.values()),
     };
     const tmpPath = this.filePath + ".tmp";
@@ -128,10 +175,46 @@ export class TaskStore {
   }
 
   create(subject: string, description: string, activeForm?: string, metadata?: Record<string, any>): Task {
+    return this.createTask(undefined, subject, description, activeForm, metadata);
+  }
+
+  createSubtask(
+    parentTaskId: string,
+    subject: string,
+    description: string,
+    activeForm?: string,
+    metadata?: Record<string, any>,
+  ): Task {
+    return this.createTask(parentTaskId, subject, description, activeForm, metadata);
+  }
+
+  private createTask(
+    parentTaskId: string | undefined,
+    subject: string,
+    description: string,
+    activeForm?: string,
+    metadata?: Record<string, any>,
+  ): Task {
     return this.withLock(() => {
+      let id: string;
+      if (parentTaskId) {
+        if (!this.tasks.has(parentTaskId)) {
+          throw new Error(`Parent task #${parentTaskId} not found`);
+        }
+        let nextSubtaskId = this.nextSubtaskIds.get(parentTaskId) ?? 1;
+        id = `${parentTaskId}.${nextSubtaskId}`;
+        while (this.tasks.has(id)) {
+          id = `${parentTaskId}.${++nextSubtaskId}`;
+        }
+        this.nextSubtaskIds.set(parentTaskId, nextSubtaskId + 1);
+      } else {
+        id = String(this.nextId++);
+      }
+
       const now = Date.now();
       const task: Task = {
-        id: String(this.nextId++),
+        id,
+        parentTaskId,
         subject,
         description,
         status: "pending",

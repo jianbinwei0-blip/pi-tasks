@@ -47,6 +47,16 @@
     "extensions": [
       "./src/index.ts"
     ],
+    "settings": [
+      {
+        "id": "taskCreationMode",
+        "label": "Prompt task creation",
+        "description": "Choose whether pi-tasks creates prompt-level tasks automatically.",
+        "type": "enum",
+        "values": ["model", "manual", "always"],
+        "default": "model"
+      }
+    ],
     "video": "https://github.com/jianbinwei0-blip/pi-tasks/raw/master/media/demo.mp4",
     "image": "https://github.com/jianbinwei0-blip/pi-tasks/raw/master/media/screenshot.png"
   }

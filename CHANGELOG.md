@@ -8,9 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prompt-scoped subtasks in `always` mode** — the first task created (or existing task moved to `in_progress`) becomes the prompt parent. Additional `TaskCreate` calls for that prompt now receive hierarchical IDs such as `#13.1` and `#13.2`; the next prompt resumes top-level numbering at `#14`. Parent links and per-parent counters persist in task-store files, with migration for existing stores.
+- **Prompt task creation modes** — new `taskCreationMode` setting with `model` (default/current model-discretionary behavior), `manual` (no prompt-level auto tasks and no reminder injection), and `always` (require the model to create/update an appropriately titled task for every user prompt, including simple/trivial ones). Configurable via pi-extmgr package configuration, project-locally via `/tasks` → Settings / `.pi/tasks-config.json`, and JSON defaults at `~/.pi/agent/extensions/pi-tasks.json`.
 - **Per-task model cost display** — task execution stats now capture `usage.cost.total` from pi assistant turns and show the resulting USD cost in the persistent widget, `TaskList`, and `TaskGet` whenever cost data is available.
 
 ### Changed
+- **Layered task settings** — pi-tasks now reads global defaults from `~/.pi/agent/extensions/pi-tasks.json` (plus legacy `tasks-config.json`) and pi-extmgr package settings before applying the project `<cwd>/.pi/tasks-config.json` override. `/tasks` → Settings writes the project override.
 - **Direct GitHub install support for the fork** — package metadata and install docs now point at `jianbinwei0-blip/pi-tasks`, with `pi install https://github.com/jianbinwei0-blip/pi-tasks` as the primary install path.
 
 ## [0.7.1] - 2026-06-24

@@ -3,15 +3,30 @@
  * auto-cascade, and widget agent ID display.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 
+let testAgentDir: string | undefined;
+
 // Force in-memory task store for all integration tests — prevents file-backed
-// store from loading stale tasks across test instances.
-beforeEach(() => { process.env.PI_TASKS = "off"; });
-afterEach(() => { delete process.env.PI_TASKS; });
+// store from loading stale tasks across test instances. Also isolate the pi
+// agent dir so user-level extension config cannot leak into tests.
+beforeEach(() => {
+  process.env.PI_TASKS = "off";
+  testAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-tasks-agent-"));
+  process.env.PI_CODING_AGENT_DIR = testAgentDir;
+});
+afterEach(() => {
+  delete process.env.PI_TASKS;
+  delete process.env.PI_CODING_AGENT_DIR;
+  if (testAgentDir) fs.rmSync(testAgentDir, { recursive: true, force: true });
+  testAgentDir = undefined;
+});
 
 // ---- Mock pi ----
 
@@ -62,9 +77,11 @@ function mockPi() {
     },
     /** Fire lifecycle event handlers (turn_start, tool_result, etc.) */
     async fireLifecycle(event: string, ...args: any[]) {
+      const results: any[] = [];
       for (const h of lifecycleHandlers.get(event) ?? []) {
-        await h(...args);
+        results.push(await h(...args));
       }
+      return results;
     },
     /** Emit an event on pi.events (simulates subagent extension). */
     emitEvent(channel: string, data: unknown) {
@@ -467,10 +484,12 @@ describe("Standalone operation (no subagents extension)", () => {
     initExtension(mock.pi as any);
   });
 
-  it("all core task tools are registered", () => {
+  it("all core task tools and the tasks command are registered", () => {
     for (const name of ["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskExecute"]) {
       expect(mock.tools.has(name)).toBe(true);
     }
+    expect(mock.commands.has("tasks")).toBe(true);
+    expect(mock.commands.has("extensions")).toBe(false);
   });
 
   it("TaskCreate works without subagents", async () => {
@@ -902,6 +921,309 @@ describe("Protocol version mismatch", () => {
     const ctx2 = mockCtx();
     await mock.fireLifecycle("before_agent_start", {}, ctx2);
     expect(ctx2.ui.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("Task creation mode", () => {
+  async function configPath() {
+    return path.join(process.cwd(), ".pi", "tasks-config.json");
+  }
+
+  async function globalConfigPath(fileName = "pi-tasks.json") {
+    if (!testAgentDir) throw new Error("test agent dir not initialized");
+    return path.join(testAgentDir, "extensions", fileName);
+  }
+
+  async function piSettingsPath(scope: "global" | "project" = "global") {
+    if (scope === "global") {
+      if (!testAgentDir) throw new Error("test agent dir not initialized");
+      return path.join(testAgentDir, "settings.json");
+    }
+    return path.join(process.cwd(), ".pi", "settings.json");
+  }
+
+  async function writeConfig(config: Record<string, unknown>) {
+    const file = await configPath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(config));
+  }
+
+  async function writeGlobalConfig(config: Record<string, unknown>, fileName?: string) {
+    const file = await globalConfigPath(fileName);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(config));
+  }
+
+  async function writePiSettings(settings: Record<string, unknown>, scope: "global" | "project" = "global") {
+    const file = await piSettingsPath(scope);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(settings));
+  }
+
+  async function removeConfig() {
+    try { fs.unlinkSync(await configPath()); } catch {}
+    try { fs.unlinkSync(await piSettingsPath("project")); } catch {}
+  }
+
+  beforeEach(async () => {
+    await removeConfig();
+  });
+
+  afterEach(async () => {
+    await removeConfig();
+  });
+
+  it("keeps default model mode as model-discretionary with no host-created task", async () => {
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Do several things" }, mockCtx());
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("loads task creation mode from user extension config", async () => {
+    await writeGlobalConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Configured globally" }, mockCtx());
+    const results = await mock.fireLifecycle("context", { messages: [] });
+
+    expect(results[0].messages.at(-1).content[0].text).toContain("taskCreationMode=always is active");
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("loads task creation mode from pi-extmgr package settings", async () => {
+    await writePiSettings({
+      packages: [
+        {
+          source: process.cwd(),
+          settings: { taskCreationMode: "always" },
+        },
+      ],
+    });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Configured via extmgr" }, mockCtx());
+    const results = await mock.fireLifecycle("context", { messages: [] });
+
+    expect(results[0].messages.at(-1).content[0].text).toContain("taskCreationMode=always is active");
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("loads manual task creation mode from pi-extmgr package settings", async () => {
+    await writePiSettings({
+      packages: [
+        {
+          source: process.cwd(),
+          settings: { taskCreationMode: "manual" },
+        },
+      ],
+    });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Configured manual via extmgr" }, mockCtx());
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("keeps legacy ambiguous pi-extmgr mode filters model-discretionary", async () => {
+    await writePiSettings({
+      packages: [
+        {
+          source: process.cwd(),
+          extensions: ["-src/extmgr/task-creation-mode-always.ts"],
+        },
+      ],
+    });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Ambiguous extmgr config" }, mockCtx());
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("lets project config override user extension and pi-extmgr config", async () => {
+    await writeGlobalConfig({ taskCreationMode: "always" });
+    await writePiSettings({
+      packages: [
+        {
+          source: process.cwd(),
+          settings: { taskCreationMode: "always" },
+        },
+      ],
+    });
+    await writeConfig({ taskCreationMode: "manual" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Project override" }, mockCtx());
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("manual mode does not create prompt tasks automatically", async () => {
+    await writeConfig({ taskCreationMode: "manual" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Do several things" }, mockCtx());
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
+  });
+
+  it("manual mode suppresses reminder injection", async () => {
+    await writeConfig({ taskCreationMode: "manual" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "Existing task", description: "Desc" });
+    for (let i = 0; i < 5; i++) await mock.fireLifecycle("turn_start", {}, mockCtx());
+    await mock.fireLifecycle("tool_result", { toolName: "read" });
+    const results = await mock.fireLifecycle("context", { messages: [] });
+
+    expect(results).toEqual([{}]);
+  });
+
+  it("always mode asks the model to create the task title and does not host-create a generic task", async () => {
+    await writeConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Explain the code" }, mockCtx());
+
+    const taskList = await mock.executeTool("TaskList", {});
+    expect(taskList.content[0].text).toBe("No tasks found");
+
+    const results = await mock.fireLifecycle("context", { messages: [] });
+    const reminderText = results[0].messages.at(-1).content[0].text;
+    expect(reminderText).toContain("taskCreationMode=always is active");
+    expect(reminderText).toContain("Choose the task title from the user's request");
+    expect(reminderText).toContain("TaskCreate");
+    expect(reminderText).toContain("even if the request is simple, trivial, conversational, or can be completed in fewer than 3 steps");
+    expect(reminderText).toContain("overrides the usual guidance to skip TaskCreate for trivial tasks");
+    expect(reminderText).toContain("automatically number them as subtasks (#parent.1, #parent.2, etc.)");
+  });
+
+  it("always mode nests additional tasks under the prompt task and resets for the next prompt", async () => {
+    await writeConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Build a complicated feature" }, mockCtx());
+    const parent = await mock.executeTool("TaskCreate", {
+      subject: "Build complicated feature",
+      description: "Deliver the complete feature",
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    const firstChild = await mock.executeTool("TaskCreate", {
+      subject: "Implement feature core",
+      description: "Build the core behavior",
+    });
+    const secondChild = await mock.executeTool("TaskCreate", {
+      subject: "Test feature core",
+      description: "Add regression coverage",
+    });
+
+    expect(parent.content[0].text).toContain("Task #1 created");
+    expect(firstChild.content[0].text).toContain("Subtask #1.1 created under #1");
+    expect(secondChild.content[0].text).toContain("Subtask #1.2 created under #1");
+
+    const childDetails = await mock.executeTool("TaskGet", { taskId: "1.1" });
+    expect(childDetails.content[0].text).toContain("Parent: #1");
+    const taskList = await mock.executeTool("TaskList", {});
+    expect(taskList.content[0].text).toContain("  #1.1 [pending] Implement feature core");
+    expect(taskList.content[0].text).toContain("  #1.2 [pending] Test feature core");
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Handle another request" }, mockCtx());
+    const nextParent = await mock.executeTool("TaskCreate", {
+      subject: "Handle another request",
+      description: "Complete the next prompt",
+    });
+    const nextChild = await mock.executeTool("TaskCreate", {
+      subject: "Check another request",
+      description: "Verify the next prompt",
+    });
+
+    expect(nextParent.content[0].text).toContain("Task #2 created");
+    expect(nextChild.content[0].text).toContain("Subtask #2.1 created under #2");
+  });
+
+  it("always mode uses a reused in-progress task as the prompt parent", async () => {
+    await writeConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Initial request" }, mockCtx());
+    await mock.executeTool("TaskCreate", {
+      subject: "Reusable request task",
+      description: "Continue this task later",
+    });
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Continue the request" }, mockCtx());
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    const child = await mock.executeTool("TaskCreate", {
+      subject: "Finish remaining step",
+      description: "Complete the reused prompt task",
+    });
+
+    expect(child.content[0].text).toContain("Subtask #1.1 created under #1");
+  });
+
+  it("model mode keeps multiple prompt tasks at the top level", async () => {
+    await writeConfig({ taskCreationMode: "model" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Plan two independent tasks" }, mockCtx());
+    const first = await mock.executeTool("TaskCreate", { subject: "First", description: "First task" });
+    const second = await mock.executeTool("TaskCreate", { subject: "Second", description: "Second task" });
+
+    expect(first.content[0].text).toContain("Task #1 created");
+    expect(second.content[0].text).toContain("Task #2 created");
+  });
+
+  it("always mode suppresses the generic optional reminder so trivial prompts still require tasks", async () => {
+    await writeConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "Existing task", description: "Desc" });
+    for (let i = 0; i < 5; i++) await mock.fireLifecycle("turn_start", {}, mockCtx());
+    await mock.fireLifecycle("tool_result", { toolName: "read" });
+    await mock.fireLifecycle("before_agent_start", { prompt: "Say hi" }, mockCtx());
+
+    const results = await mock.fireLifecycle("context", { messages: [] });
+    const reminderText = results[0].messages.at(-1).content[0].text;
+    expect(reminderText).toContain("taskCreationMode=always is active");
+    expect(reminderText).not.toContain("Only use these if relevant");
+  });
+
+  it("always mode queues one model-owned task instruction for each user prompt", async () => {
+    await writeConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "First" }, mockCtx());
+    const first = await mock.fireLifecycle("context", { messages: [] });
+    expect(first[0].messages.at(-1).content[0].text).toContain("taskCreationMode=always is active");
+    const consumed = await mock.fireLifecycle("context", { messages: [] });
+    expect(consumed).toEqual([{}]);
+
+    await mock.fireLifecycle("before_agent_start", { prompt: "Second" }, mockCtx());
+    const second = await mock.fireLifecycle("context", { messages: [] });
+    expect(second[0].messages.at(-1).content[0].text).toContain("taskCreationMode=always is active");
   });
 });
 

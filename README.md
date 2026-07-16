@@ -70,11 +70,11 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
 | `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
+| `maxVisible` | `5`–`100` | `10` | Targets how many task lines the widget shows (ignored when `showAll` is on); `status` + `top` may exceed it to keep every unfinished task visible |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
+| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. With `sortOrder: status`, `top` folds only completed tasks and keeps every unfinished task visible |
 
-> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order.
+> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order. If unfinished work alone exceeds `maxVisible`, the widget exceeds that target rather than hiding unfinished tasks.
 
 ## Tools
 

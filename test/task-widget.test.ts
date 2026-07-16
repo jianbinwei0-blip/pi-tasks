@@ -457,6 +457,28 @@ describe("TaskWidget", () => {
     expect(lines.some(l => l.includes("Done 3"))).toBe(false);
   });
 
+  it("keeps every unfinished task visible with status order and top truncation", () => {
+    widget = new TaskWidget(store, { sortOrder: "status", hiddenAt: "top", showAll: false, maxVisible: 5 });
+    widget.setUICtx(ui.ctx);
+    // 2 completed + 6 unfinished exceeds the configured limit.
+    for (let i = 1; i <= 2; i++) store.create(`Done ${i}`, "Desc");
+    for (let i = 1; i <= 2; i++) store.create(`Working ${i}`, "Desc");
+    for (let i = 1; i <= 4; i++) store.create(`Todo ${i}`, "Desc");
+    for (let i = 1; i <= 2; i++) store.update(String(i), { status: "completed" });
+    for (let i = 3; i <= 4; i++) store.update(String(i), { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("2 more");
+    for (let i = 1; i <= 2; i++) {
+      expect(lines.some(l => l.includes(`Working ${i}`))).toBe(true);
+    }
+    for (let i = 1; i <= 4; i++) {
+      expect(lines.some(l => l.includes(`Todo ${i}`))).toBe(true);
+    }
+    expect(lines.some(l => l.includes("Done"))).toBe(false);
+  });
+
   it("truncates from bottom by default", () => {
     widget = new TaskWidget(store, { maxVisible: 3 });
     widget.setUICtx(ui.ctx);

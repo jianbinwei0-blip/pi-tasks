@@ -31,6 +31,23 @@ function truncateFromBottom(tasks: Task[], limit: number): Task[] {
 
 const TRUNCATE_FNS = { top: truncateFromTop, bottom: truncateFromBottom };
 
+function selectVisibleTasks(
+  tasks: Task[],
+  limit: number,
+  sortOrder: "id" | "status" | "recent" | "oldest",
+  hiddenAt: "top" | "bottom",
+): Task[] {
+  if (sortOrder === "status" && hiddenAt === "top") {
+    const unfinished = tasks.filter(task => task.status !== "completed");
+    const completed = tasks.filter(task => task.status === "completed");
+    const completedSlots = Math.max(0, limit - unfinished.length);
+    const firstVisibleCompleted = Math.max(0, completed.length - completedSlots);
+    return [...completed.slice(firstVisibleCompleted), ...unfinished];
+  }
+
+  return TRUNCATE_FNS[hiddenAt](tasks, limit);
+}
+
 // ---- Types ----
 
 export type Theme = {
@@ -327,7 +344,7 @@ export class TaskWidget {
     const showAll = this.config.showAll ?? false;
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
     const hiddenAt = this.config.hiddenAt ?? "bottom";
-    const visible = showAll ? tasks : TRUNCATE_FNS[hiddenAt](tasks, limit);
+    const visible = showAll ? tasks : selectVisibleTasks(tasks, limit, sortOrder, hiddenAt);
 
     const hiddenCount = tasks.length - visible.length;
     const overflowLine = hiddenCount > 0

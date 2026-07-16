@@ -73,7 +73,7 @@ export async function openSettingsMenu(
         label: "Max visible tasks in widget",
         description:
           "Only applies when 'Show all tasks' is OFF. " +
-          "Caps how many task lines the widget shows.",
+          "Targets this many task lines; status order with top hiding may exceed it to keep unfinished tasks visible.",
         currentValue: String(cfg.maxVisible ?? 10),
         values: ["5", "10", "15", "20", "30", "50", "100"],
       },
@@ -91,7 +91,7 @@ export async function openSettingsMenu(
         label: "Hidden tasks position",
         description:
           '"bottom" hides tasks from the end of the list. ' +
-          '"top" hides tasks from the start (useful with status sort to collapse completed tasks).',
+          'With status order, "top" collapses only completed tasks so every unfinished task stays visible.',
         currentValue: cfg.hiddenAt ?? "bottom",
         values: ["bottom", "top"],
       },

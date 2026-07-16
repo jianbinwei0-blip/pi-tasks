@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Status-sorted top hiding no longer hides unfinished work** — when `sortOrder` is `status` and `hiddenAt` is `top`, the widget now collapses completed tasks only. If unfinished tasks exceed `maxVisible`, they all remain visible.
+
 ### Added
 - **Prompt-scoped subtasks in `always` mode** — the first task created (or existing task moved to `in_progress`) becomes the prompt parent. Additional `TaskCreate` calls for that prompt now receive hierarchical IDs such as `#13.1` and `#13.2`; the next prompt resumes top-level numbering at `#14`. Parent links and per-parent counters persist in task-store files, with migration for existing stores.
 - **Prompt task creation modes** — new `taskCreationMode` setting with `model` (default/current model-discretionary behavior), `manual` (no prompt-level auto tasks and no reminder injection), and `always` (require the model to create/update an appropriately titled task for every user prompt, including simple/trivial ones). Configurable via pi-extmgr package configuration, project-locally via `/tasks` → Settings / `.pi/tasks-config.json`, and JSON defaults at `~/.pi/agent/extensions/pi-tasks.json`.

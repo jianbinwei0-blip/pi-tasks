@@ -70,7 +70,7 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
 | `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| `maxVisible` | `5`–`100` | `10` | Targets how many task lines the widget shows (ignored when `showAll` is on); `status` + `top` may exceed it to keep every unfinished task visible |
+| `maxVisible` | `5`–`100` | `10` | Targets how many task lines the widget shows (ignored for display when `showAll` is on) and sets the cleanup limit for `autoClearCompleted: "oldest"`; `status` + `top` may exceed it to keep every unfinished task visible |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. With `sortOrder: status`, `top` folds only completed tasks and keeps every unfinished task visible |
 
@@ -243,8 +243,9 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 | `never` | Completed tasks stay visible until manually cleared via `/tasks` → Clear completed |
 | `on_list_complete` **(default)** | Cleared after all tasks are done and a few idle turns pass |
 | `on_task_complete` | Each completed task cleared individually after a few turns |
+| `oldest` | When total tasks exceed `maxVisible`, clears only enough of the oldest completed tasks to meet the limit; unfinished tasks are never cleared |
 
-Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
+The `on_list_complete` and `on_task_complete` modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear. The `oldest` mode applies its size limit immediately.
 
 Settings (`taskScope`, `taskCreationMode`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) can be set globally in `~/.pi/agent/extensions/pi-tasks.json` and overridden per project via `/tasks` → Settings (saved to `<cwd>/.pi/tasks-config.json`). `taskCreationMode` can also be configured through pi-extmgr's package configuration panel.
 

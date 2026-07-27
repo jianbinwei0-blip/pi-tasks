@@ -26,7 +26,13 @@ export async function openSettingsMenu(
   cfg: TasksConfig,
   onBack: () => Promise<void>,
   clearDelayTurns: number,
+  onConfigChange?: () => void,
 ): Promise<void> {
+  const persistConfig = () => {
+    saveTasksConfig(cfg);
+    onConfigChange?.();
+  };
+
   await ui.custom((_tui, theme, _kb, done) => {
     const items: SettingItem[] = [
       {
@@ -72,7 +78,8 @@ export async function openSettingsMenu(
         id: "maxVisible",
         label: "Max visible tasks in widget",
         description:
-          "Only applies when 'Show all tasks' is OFF. " +
+          "For widget display, only applies when 'Show all tasks' is OFF. " +
+          "The 'oldest' auto-clear mode also uses it as its cleanup limit. " +
           "Targets this many task lines; status order with top hiding may exceed it to keep unfinished tasks visible.",
         currentValue: String(cfg.maxVisible ?? 10),
         values: ["5", "10", "15", "20", "30", "50", "100"],
@@ -102,9 +109,10 @@ export async function openSettingsMenu(
           "never: completed tasks stay visible until manually cleared. " +
           "on_list_complete: cleared automatically after all tasks are done. " +
           "on_task_complete: each task cleared shortly after it completes. " +
-          `Clearing lags ~${clearDelayTurns} turns.`,
+          "oldest: when the task count exceeds 'Max visible tasks', clear the oldest completed tasks first. " +
+          `Timed clearing modes lag ~${clearDelayTurns} turns.`,
         currentValue: cfg.autoClearCompleted ?? "on_list_complete",
-        values: ["never", "on_list_complete", "on_task_complete"],
+        values: ["never", "on_list_complete", "on_task_complete", "oldest"],
       },
     ];
 
@@ -115,35 +123,35 @@ export async function openSettingsMenu(
       /* onChange */ (id, newValue) => {
         if (id === "taskCreationMode") {
           cfg.taskCreationMode = newValue as TasksConfig["taskCreationMode"];
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "autoCascade") {
           cfg.autoCascade = newValue === "on";
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "taskScope") {
           cfg.taskScope = newValue as "memory" | "session" | "project";
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "autoClearCompleted") {
           cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "showAll") {
           cfg.showAll = newValue === "on";
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "maxVisible") {
           cfg.maxVisible = Number(newValue);
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "sortOrder") {
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
-          saveTasksConfig(cfg);
+          persistConfig();
         }
         if (id === "hiddenAt") {
           cfg.hiddenAt = newValue as "top" | "bottom";
-          saveTasksConfig(cfg);
+          persistConfig();
         }
       },
       /* onCancel */ () => done(undefined),

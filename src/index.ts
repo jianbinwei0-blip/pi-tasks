@@ -252,7 +252,12 @@ export default function (pi: ExtensionAPI) {
     return prompt;
   }
 
-  const autoClear = new AutoClearManager(() => store, () => cfg.autoClearCompleted ?? "on_list_complete", AUTO_CLEAR_DELAY);
+  const autoClear = new AutoClearManager(
+    () => store,
+    () => cfg.autoClearCompleted ?? "on_list_complete",
+    AUTO_CLEAR_DELAY,
+    () => cfg.maxVisible ?? 10,
+  );
 
   // ── Subagent completion listener ──
   // Listens for subagent lifecycle events to update task status and optionally cascade.
@@ -352,6 +357,7 @@ export default function (pi: ExtensionAPI) {
         store.clearCompleted();
         if (taskScope === "session") store.deleteFileIfEmpty();
       } else {
+        autoClear.onTaskListChanged();
         widget.update();
       }
     }
@@ -593,6 +599,7 @@ All tasks are created with status \`pending\`.
         ? store.createSubtask(parentTaskId, params.subject, params.description, params.activeForm, metadata)
         : store.create(params.subject, params.description, params.activeForm, metadata);
       promptTaskHierarchy.captureCreatedTask(task.id);
+      autoClear.onTaskListChanged();
       widget.update();
       const message = parentTaskId
         ? `Subtask #${task.id} created under #${parentTaskId}: ${task.subject}`
@@ -1262,7 +1269,10 @@ Set up task dependencies:
       };
 
       const settingsMenu = (): Promise<void> =>
-        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY);
+        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY, () => {
+          autoClear.onTaskListChanged();
+          widget.update();
+        });
 
       const createTask = async (): Promise<void> => {
         const subject = await ui.input("Task subject");
@@ -1271,6 +1281,7 @@ Set up task dependencies:
         if (!description) return mainMenu();
 
         store.create(subject, description);
+        autoClear.onTaskListChanged();
         widget.update();
         return mainMenu();
       };

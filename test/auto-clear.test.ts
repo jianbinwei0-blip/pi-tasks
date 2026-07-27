@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoClearMode } from "../src/auto-clear.js";
 import { AutoClearManager } from "../src/auto-clear.js";
 import { TaskStore } from "../src/task-store.js";
@@ -178,6 +178,120 @@ describe("auto-clear: on_list_complete mode", () => {
 
     expect(manager.onTurnStart(4)).toBe(false);
     expect(manager.onTurnStart(5)).toBe(true);
+  });
+});
+
+describe("auto-clear: oldest mode", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("clears only enough oldest completed tasks to meet maxVisible", () => {
+    const store = new TaskStore();
+    let maxVisible = 3;
+
+    vi.useFakeTimers({ now: 1000 });
+    for (const subject of ["A", "B", "C", "D", "E"]) {
+      store.create(subject, "Desc");
+    }
+
+    vi.advanceTimersByTime(100);
+    store.update("3", { status: "completed" });
+    vi.advanceTimersByTime(100);
+    store.update("1", { status: "completed" });
+    vi.advanceTimersByTime(100);
+    store.update("2", { status: "completed" });
+
+    const manager = new AutoClearManager(
+      () => store,
+      () => "oldest",
+      4,
+      () => maxVisible,
+    );
+
+    expect(manager.onTurnStart(1)).toBe(true);
+    expect(store.list().map(task => task.id)).toEqual(["2", "4", "5"]);
+
+    maxVisible = 2;
+    expect(manager.onTurnStart(2)).toBe(true);
+    expect(store.list().map(task => task.id)).toEqual(["4", "5"]);
+  });
+
+  it("never clears unfinished tasks when they exceed maxVisible", () => {
+    const store = new TaskStore();
+    for (const subject of ["Done", "Pending A", "Pending B", "In progress"]) {
+      store.create(subject, "Desc");
+    }
+    store.update("1", { status: "completed" });
+    store.update("4", { status: "in_progress" });
+
+    const manager = new AutoClearManager(
+      () => store,
+      () => "oldest",
+      4,
+      () => 2,
+    );
+
+    expect(manager.onTurnStart(1)).toBe(true);
+    expect(store.list().map(task => task.id)).toEqual(["2", "3", "4"]);
+    expect(store.list().every(task => task.status !== "completed")).toBe(true);
+    expect(manager.onTurnStart(2)).toBe(false);
+  });
+
+  it("does nothing while the task count is within maxVisible", () => {
+    const store = new TaskStore();
+    store.create("Done", "Desc");
+    store.create("Pending", "Desc");
+    store.update("1", { status: "completed" });
+
+    const manager = new AutoClearManager(
+      () => store,
+      () => "oldest",
+      4,
+      () => 2,
+    );
+
+    expect(manager.onTurnStart(1)).toBe(false);
+    expect(store.list()).toHaveLength(2);
+  });
+
+  it("enforces the limit immediately after a completion or list-size change", () => {
+    const store = new TaskStore();
+    store.create("Old completed", "Desc");
+    store.create("Pending", "Desc");
+    store.update("1", { status: "completed" });
+
+    const manager = new AutoClearManager(
+      () => store,
+      () => "oldest",
+      4,
+      () => 2,
+    );
+
+    store.create("Newest", "Desc");
+    expect(manager.onTaskListChanged()).toBe(true);
+    expect(store.list().map(task => task.id)).toEqual(["2", "3"]);
+
+    store.create("Completing now", "Desc");
+    store.update("4", { status: "completed" });
+    manager.trackCompletion("4", 1);
+    expect(store.list().map(task => task.id)).toEqual(["2", "3"]);
+  });
+
+  it("cleans up dependency edges for evicted completed tasks", () => {
+    const store = new TaskStore();
+    store.create("Old blocker", "Desc");
+    store.create("Blocked", "Desc");
+    store.update("1", { addBlocks: ["2"], status: "completed" });
+
+    const manager = new AutoClearManager(
+      () => store,
+      () => "oldest",
+      4,
+      () => 1,
+    );
+
+    manager.onTurnStart(1);
+    expect(store.get("1")).toBeUndefined();
+    expect(store.get("2")!.blockedBy).toEqual([]);
   });
 });
 

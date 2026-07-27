@@ -1,16 +1,18 @@
 /**
  * auto-clear.ts — Turn-based auto-clearing of completed tasks.
  *
- * Two modes:
+ * Modes:
+ * - "never": completed tasks remain until manually cleared
  * - "on_task_complete": each completed task gets its own REMINDER_INTERVAL countdown, deleted individually
  * - "on_list_complete": countdown starts when ALL tasks are completed, cleared as a batch
+ * - "oldest": when the list exceeds maxVisible, the oldest completed tasks are cleared first
  *
- * Both use the same turn delay (REMINDER_INTERVAL) for consistency.
+ * The two countdown modes use the same turn delay (REMINDER_INTERVAL) for consistency.
  */
 
 import type { TaskStore } from "./task-store.js";
 
-export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
+export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete" | "oldest";
 
 export class AutoClearManager {
   /** Per-task: turn when task was marked completed ("on_task_complete" mode). */
@@ -21,8 +23,10 @@ export class AutoClearManager {
   constructor(
     private getStore: () => TaskStore,
     private getMode: () => AutoClearMode,
-    /** How many turns completed tasks linger before auto-clearing. */
+    /** How many turns completed tasks linger in the countdown modes. */
     private clearDelayTurns = 4,
+    /** Current widget task limit used by the "oldest" mode. */
+    private getMaxVisible: () => number = () => 10,
   ) {}
 
   /** Record a task completion. Call AFTER cascade logic. */
@@ -34,7 +38,37 @@ export class AutoClearManager {
       this.completedAtTurn.set(taskId, currentTurn);
     } else if (mode === "on_list_complete") {
       this.checkAllCompleted(currentTurn);
+    } else if (mode === "oldest") {
+      this.clearOldestCompletedOverflow();
     }
+  }
+
+  /** Apply size-based cleanup after a task-list or maxVisible change. */
+  onTaskListChanged(): boolean {
+    return this.getMode() === "oldest" && this.clearOldestCompletedOverflow();
+  }
+
+  /** Clear only enough oldest completed tasks to bring the list down to maxVisible. */
+  private clearOldestCompletedOverflow(): boolean {
+    const store = this.getStore();
+    const tasks = store.list("oldest");
+    const configuredLimit = this.getMaxVisible();
+    const maxVisible = Number.isFinite(configuredLimit)
+      ? Math.max(0, Math.floor(configuredLimit))
+      : 10;
+    const overflowCount = tasks.length - maxVisible;
+    if (overflowCount <= 0) return false;
+
+    const tasksToClear = tasks
+      .filter(task => task.status === "completed")
+      .slice(0, overflowCount);
+
+    for (const task of tasksToClear) {
+      store.delete(task.id);
+      this.completedAtTurn.delete(task.id);
+    }
+
+    return tasksToClear.length > 0;
   }
 
   /** Check if all tasks are completed and start/reset the batch countdown. */
@@ -65,6 +99,10 @@ export class AutoClearManager {
   onTurnStart(currentTurn: number): boolean {
     const mode = this.getMode();
     let cleared = false;
+
+    if (mode === "oldest") {
+      return this.clearOldestCompletedOverflow();
+    }
 
     if (mode === "on_task_complete") {
       for (const [taskId, turn] of this.completedAtTurn) {

@@ -17,7 +17,7 @@ export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
   taskCreationMode?: TaskCreationMode;  // default: "model"
   autoCascade?: boolean;   // default: false
-  autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
+  autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete" | "oldest";  // default: "on_list_complete"
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
   sortOrder?: "id" | "status" | "recent" | "oldest";  // default: "id"

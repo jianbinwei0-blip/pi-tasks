@@ -29,9 +29,10 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
+import { formatOutputTokenRate, formatTotalTokens } from "./task-stats.js";
 import { compareTaskIds, TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
-import { isCompletedTaskExecutionStats, isTaskExecutionStats } from "./types.js";
+import { isCompletedTaskExecutionStats, isTaskExecutionStats, type TaskExecutionStats } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 
@@ -79,10 +80,26 @@ function extractUsageCost(usage: any): number {
   return typeof total === "number" && Number.isFinite(total) ? total : 0;
 }
 
-function formatExecutionUsageParts(stats: { inputTokens?: number; outputTokens?: number; costUsd?: number }): string[] {
+function extractUsageTotalTokens(usage: any): number {
+  const reportedTotal = usage?.totalTokens;
+  if (typeof reportedTotal === "number" && Number.isFinite(reportedTotal) && reportedTotal > 0) {
+    return reportedTotal;
+  }
+
+  return [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite]
+    .reduce((total: number, value: unknown) => (
+      typeof value === "number" && Number.isFinite(value) && value > 0 ? total + value : total
+    ), 0);
+}
+
+function formatExecutionUsageParts(stats: TaskExecutionStats): string[] {
   const parts: string[] = [];
   if ((stats.inputTokens ?? 0) > 0) parts.push(`↑ ${formatTokens(stats.inputTokens ?? 0)}`);
   if ((stats.outputTokens ?? 0) > 0) parts.push(`↓ ${formatTokens(stats.outputTokens ?? 0)}`);
+  const totalTokens = formatTotalTokens(stats);
+  if (totalTokens) parts.push(totalTokens);
+  const tokenRate = formatOutputTokenRate(stats);
+  if (tokenRate) parts.push(tokenRate);
   if (stats.costUsd !== undefined) parts.push(formatCostUsd(stats.costUsd));
   return parts;
 }
@@ -407,7 +424,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
-      widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0, extractUsageCost(msg.usage));
+      widget.addTokenUsage(
+        msg.usage.input ?? 0,
+        msg.usage.output ?? 0,
+        extractUsageCost(msg.usage),
+        extractUsageTotalTokens(msg.usage),
+      );
     }
   });
 
@@ -633,6 +655,7 @@ Returns a summary of each task:
 - **status**: 'pending', 'in_progress', or 'completed'
 - **owner**: Agent ID if assigned, empty if available
 - **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
+- **execution stats**: Cost, total token count, and average output-token rate when available
 
 Use TaskGet with a specific task ID to view full details including description and comments.`,
     parameters: Type.Object({}),
@@ -662,6 +685,14 @@ Use TaskGet with a specific task ID to view full details including description a
           : undefined;
         if (stats?.costUsd !== undefined) {
           line += ` [${formatCostUsd(stats.costUsd)}]`;
+        }
+        const totalTokens = stats ? formatTotalTokens(stats) : undefined;
+        if (totalTokens) {
+          line += ` [${totalTokens}]`;
+        }
+        const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
+        if (tokenRate) {
+          line += ` [${tokenRate}]`;
         }
 
         // Only show non-completed blockers
@@ -706,6 +737,7 @@ Returns full task details:
 - **parent**: Parent task ID when this is a subtask
 - **blocks**: Tasks waiting on this one to complete
 - **blockedBy**: Tasks that must complete before this one can start
+- **execution stats**: Timing, input/output/total tokens, average output-token rate, and cost when available
 
 ## Tips
 
@@ -1216,8 +1248,12 @@ Set up task dependencies:
             ? t.metadata.executionStats
             : undefined;
           const costSuffix = stats?.costUsd !== undefined ? ` · ${formatCostUsd(stats.costUsd)}` : "";
+          const totalTokens = stats ? formatTotalTokens(stats) : undefined;
+          const totalSuffix = totalTokens ? ` · ${totalTokens}` : "";
+          const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
+          const rateSuffix = tokenRate ? ` · ${tokenRate}` : "";
           const indent = t.parentTaskId ? "  " : "";
-          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}`;
+          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}${totalSuffix}${rateSuffix}`;
         });
         choices.push("← Back");
 

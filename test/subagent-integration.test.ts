@@ -508,7 +508,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("#2");
   });
 
-  it("TaskList shows task cost when execution stats include cost", async () => {
+  it("TaskList shows task cost, total tokens, and output rate", async () => {
     await mock.executeTool("TaskCreate", { subject: "Costed", description: "desc" });
     await mock.executeTool("TaskUpdate", {
       taskId: "1",
@@ -525,7 +525,7 @@ describe("Standalone operation (no subagents extension)", () => {
     });
 
     const result = await mock.executeTool("TaskList", {});
-    expect(result.content[0].text).toContain("#1 [pending] Costed [$0.012]");
+    expect(result.content[0].text).toContain("#1 [pending] Costed [$0.012] [1.6k tok] [6.2 tok/s]");
   });
 
   it("TaskGet works without subagents", async () => {
@@ -582,6 +582,8 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("1m 5s");
     expect(result.content[0].text).toContain("↑ 1.2k");
     expect(result.content[0].text).toContain("↓ 400");
+    expect(result.content[0].text).toContain("1.6k tok");
+    expect(result.content[0].text).toContain("6.2 tok/s");
     expect(result.content[0].text).toContain("$0.012");
     expect(result.content[0].text).toContain('Metadata: {"note":"kept"}');
     expect(result.content[0].text).not.toContain('"executionStats"');
@@ -597,6 +599,9 @@ describe("Standalone operation (no subagents extension)", () => {
         usage: {
           input: 1000,
           output: 500,
+          cacheRead: 3000,
+          cacheWrite: 0,
+          totalTokens: 4500,
           cost: { total: 0.0123 },
         },
       },
@@ -606,6 +611,7 @@ describe("Standalone operation (no subagents extension)", () => {
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("↑ 1k");
     expect(result.content[0].text).toContain("↓ 500");
+    expect(result.content[0].text).toContain("4.5k tok");
     expect(result.content[0].text).toContain("$0.012");
   });
 

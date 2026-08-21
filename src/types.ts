@@ -10,6 +10,8 @@ export interface TaskExecutionStats {
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** Provider-reported total, including cache-read and cache-write tokens. */
+  totalTokens?: number;
   costUsd?: number;
 }
 
@@ -24,7 +26,7 @@ export function isTaskExecutionStats(value: unknown): value is TaskExecutionStat
   if (!value || typeof value !== "object") return false;
   const stats = value as Record<string, unknown>;
   if (typeof stats.startedAt !== "number" || !Number.isFinite(stats.startedAt)) return false;
-  for (const key of ["completedAt", "durationMs", "inputTokens", "outputTokens", "costUsd"] as const) {
+  for (const key of ["completedAt", "durationMs", "inputTokens", "outputTokens", "totalTokens", "costUsd"] as const) {
     if (stats[key] !== undefined && (typeof stats[key] !== "number" || !Number.isFinite(stats[key]))) {
       return false;
     }

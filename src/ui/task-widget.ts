@@ -9,6 +9,7 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { calculateTotalTokens, formatOutputTokenRate, formatTotalTokens } from "../task-stats.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 import {
@@ -70,11 +71,12 @@ const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", 
 
 const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
-/** Per-task runtime metrics (elapsed time, token usage, and model cost). */
+/** Per-task runtime metrics (elapsed time, token usage/rate, and model cost). */
 export interface TaskMetrics {
   startedAt: number;
   inputTokens: number;
   outputTokens: number;
+  totalTokens: number;
   costUsd: number;
 }
 
@@ -117,10 +119,15 @@ function formatClockTime(ms: number): string {
 function formatLiveStats(theme: Theme, metrics: TaskMetrics | undefined): string {
   if (!metrics) return "";
 
-  const elapsed = formatDuration(Date.now() - metrics.startedAt);
+  const now = Date.now();
+  const elapsed = formatDuration(now - metrics.startedAt);
   const tokenParts: string[] = [];
   if (metrics.inputTokens > 0) tokenParts.push(`↑ ${formatTokens(metrics.inputTokens)}`);
   if (metrics.outputTokens > 0) tokenParts.push(`↓ ${formatTokens(metrics.outputTokens)}`);
+  const totalTokens = formatTotalTokens(metrics);
+  if (totalTokens) tokenParts.push(totalTokens);
+  const tokenRate = formatOutputTokenRate(metrics, now);
+  if (tokenRate) tokenParts.push(tokenRate);
   if (metrics.costUsd > 0) tokenParts.push(formatCostUsd(metrics.costUsd));
 
   const statParts = [`started ${formatClockTime(metrics.startedAt)}`, elapsed, ...tokenParts];
@@ -162,6 +169,7 @@ export class TaskWidget {
       startedAt,
       inputTokens: existingStats?.inputTokens ?? 0,
       outputTokens: existingStats?.outputTokens ?? 0,
+      totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
     };
     if (existingStats?.costUsd !== undefined) {
       executionStats.costUsd = existingStats.costUsd;
@@ -186,6 +194,7 @@ export class TaskWidget {
         durationMs: Math.max(0, completedAt - startedAt),
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
+        totalTokens: metrics.totalTokens,
       };
       const costUsd = metrics.costUsd > 0 ? metrics.costUsd : existingStats?.costUsd;
       if (costUsd !== undefined) stats.costUsd = costUsd;
@@ -209,6 +218,7 @@ export class TaskWidget {
       durationMs: Math.max(0, task.updatedAt - startedAt),
       inputTokens: 0,
       outputTokens: 0,
+      totalTokens: 0,
     };
   }
 
@@ -240,6 +250,7 @@ export class TaskWidget {
           startedAt,
           inputTokens: existingStats?.inputTokens ?? 0,
           outputTokens: existingStats?.outputTokens ?? 0,
+          totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
           costUsd: existingStats?.costUsd ?? 0,
         });
         if (!existingStats) {
@@ -282,6 +293,7 @@ export class TaskWidget {
           startedAt,
           inputTokens: existingStats?.inputTokens ?? 0,
           outputTokens: existingStats?.outputTokens ?? 0,
+          totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
           costUsd: existingStats?.costUsd ?? 0,
         });
         if (!existingStats) {
@@ -298,13 +310,21 @@ export class TaskWidget {
   }
 
   /** Record token usage and model cost for the currently active task(s). */
-  addTokenUsage(inputTokens: number, outputTokens: number, costUsd = 0) {
+  addTokenUsage(
+    inputTokens: number,
+    outputTokens: number,
+    costUsd = 0,
+    totalTokens = inputTokens + outputTokens,
+  ) {
     // Distribute to all currently active tasks
     for (const id of this.activeTaskIds) {
       const m = this.metrics.get(id);
       if (m) {
         m.inputTokens += inputTokens;
         m.outputTokens += outputTokens;
+        if (Number.isFinite(totalTokens) && totalTokens > 0) {
+          m.totalTokens += totalTokens;
+        }
         if (Number.isFinite(costUsd) && costUsd > 0) {
           m.costUsd += costUsd;
         }
@@ -392,6 +412,8 @@ export class TaskWidget {
         const stats = isCompletedTaskExecutionStats(task.metadata.executionStats)
           ? task.metadata.executionStats
           : undefined;
+        const totalTokens = stats ? formatTotalTokens(stats) : undefined;
+        const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
         const statParts = stats
           ? [
             `started ${formatClockTime(stats.startedAt)}`,
@@ -399,6 +421,8 @@ export class TaskWidget {
             formatDuration(stats.durationMs),
             ...(stats.inputTokens > 0 ? [`↑ ${formatTokens(stats.inputTokens)}`] : []),
             ...(stats.outputTokens > 0 ? [`↓ ${formatTokens(stats.outputTokens)}`] : []),
+            ...(totalTokens ? [totalTokens] : []),
+            ...(tokenRate ? [tokenRate] : []),
             ...(stats.costUsd !== undefined ? [formatCostUsd(stats.costUsd)] : []),
           ]
           : [];

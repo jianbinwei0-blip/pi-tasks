@@ -9,7 +9,11 @@
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { calculateTotalTokens, formatOutputTokenRate, formatTotalTokens } from "../task-stats.js";
+import {
+  calculateTotalTokens,
+  formatCompactOutputTokenRate,
+  formatCompactTotalTokens,
+} from "../task-stats.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 import {
@@ -80,16 +84,17 @@ export interface TaskMetrics {
   costUsd: number;
 }
 
-/** Format milliseconds as a human-readable duration (e.g., "2m 49s", "1h 3m"). */
-function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** Format milliseconds as compact stopwatch time (e.g., "2:49", "1:02:03"). */
+function formatCompactDuration(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
   const sec = totalSec % 60;
-  if (min < 60) return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) return `${totalMin}:${pad2(sec)}`;
+  return `${Math.floor(totalMin / 60)}:${pad2(totalMin % 60)}:${pad2(sec)}`;
 }
 
 /** Format token count with k suffix (e.g., "4.1k", "850"). */
@@ -107,31 +112,39 @@ function formatCostUsd(costUsd: number): string {
   return `$${costUsd.toFixed(2)}`;
 }
 
-/** Format a stable, human-readable clock time with second precision. */
+/** Format local clock time in stable 24-hour notation with second precision. */
 function formatClockTime(ms: number): string {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(ms);
+  const date = new Date(ms);
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
 }
 
-function formatLiveStats(theme: Theme, metrics: TaskMetrics | undefined): string {
-  if (!metrics) return "";
+function formatWidgetStats(
+  theme: Theme,
+  stats: TaskExecutionStats | undefined,
+  now = Date.now(),
+): string {
+  if (!stats) return "";
 
-  const now = Date.now();
-  const elapsed = formatDuration(now - metrics.startedAt);
+  const durationMs = stats.durationMs ?? (stats.completedAt ?? now) - stats.startedAt;
+  const timeline = stats.completedAt === undefined
+    ? `${formatClockTime(stats.startedAt)} Δ${formatCompactDuration(durationMs)}`
+    : `${formatClockTime(stats.startedAt)} → ${formatClockTime(stats.completedAt)} Δ${formatCompactDuration(durationMs)}`;
+
   const tokenParts: string[] = [];
-  if (metrics.inputTokens > 0) tokenParts.push(`↑ ${formatTokens(metrics.inputTokens)}`);
-  if (metrics.outputTokens > 0) tokenParts.push(`↓ ${formatTokens(metrics.outputTokens)}`);
-  const totalTokens = formatTotalTokens(metrics);
+  if ((stats.inputTokens ?? 0) > 0) tokenParts.push(`↑${formatTokens(stats.inputTokens ?? 0)}`);
+  if ((stats.outputTokens ?? 0) > 0) tokenParts.push(`↓${formatTokens(stats.outputTokens ?? 0)}`);
+  const totalTokens = formatCompactTotalTokens(stats);
   if (totalTokens) tokenParts.push(totalTokens);
-  const tokenRate = formatOutputTokenRate(metrics, now);
-  if (tokenRate) tokenParts.push(tokenRate);
-  if (metrics.costUsd > 0) tokenParts.push(formatCostUsd(metrics.costUsd));
 
-  const statParts = [`started ${formatClockTime(metrics.startedAt)}`, elapsed, ...tokenParts];
-  return ` ${theme.fg("dim", `(${statParts.join(" · ")})`)}`;
+  const statGroups = [timeline];
+  if (tokenParts.length > 0) statGroups.push(tokenParts.join(" "));
+  const tokenRate = formatCompactOutputTokenRate(stats, now);
+  if (tokenRate) statGroups.push(tokenRate);
+  if (stats.costUsd !== undefined && (stats.completedAt !== undefined || stats.costUsd > 0)) {
+    statGroups.push(formatCostUsd(stats.costUsd));
+  }
+
+  return ` ${theme.fg("dim", `(${statGroups.join(" · ")})`)}`;
 }
 
 // ---- Widget ----
@@ -406,34 +419,20 @@ export class TaskWidget {
         const form = task.activeForm || task.subject;
         const agentId = task.metadata?.agentId;
         const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
-        const stats = formatLiveStats(theme, this.metrics.get(task.id));
+        const stats = formatWidgetStats(theme, this.metrics.get(task.id));
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
       } else if (task.status === "completed") {
         const stats = isCompletedTaskExecutionStats(task.metadata.executionStats)
           ? task.metadata.executionStats
           : undefined;
-        const totalTokens = stats ? formatTotalTokens(stats) : undefined;
-        const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
-        const statParts = stats
-          ? [
-            `started ${formatClockTime(stats.startedAt)}`,
-            `ended ${formatClockTime(stats.completedAt)}`,
-            formatDuration(stats.durationMs),
-            ...(stats.inputTokens > 0 ? [`↑ ${formatTokens(stats.inputTokens)}`] : []),
-            ...(stats.outputTokens > 0 ? [`↓ ${formatTokens(stats.outputTokens)}`] : []),
-            ...(totalTokens ? [totalTokens] : []),
-            ...(tokenRate ? [tokenRate] : []),
-            ...(stats.costUsd !== undefined ? [formatCostUsd(stats.costUsd)] : []),
-          ]
-          : [];
-        const statSuffix = statParts.length > 0 ? ` ${theme.fg("dim", `(${statParts.join(" · ")})`)}` : "";
+        const statSuffix = formatWidgetStats(theme, stats);
         text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}${statSuffix}`;
       } else {
         const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
           : "";
         const stats = task.status === "in_progress"
-          ? formatLiveStats(theme, this.metrics.get(task.id))
+          ? formatWidgetStats(theme, this.metrics.get(task.id))
           : "";
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${stats}`;
       }

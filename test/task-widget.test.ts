@@ -88,8 +88,7 @@ describe("TaskWidget", () => {
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain("◼");
     expect(lines[1]).toContain("Working on it");
-    expect(lines[1]).toMatch(/started .*:\d{2}:\d{2}/);
-    expect(lines[1]).toContain("0s");
+    expect(lines[1]).toMatch(/\(\d{2}:\d{2}:\d{2} Δ0:00\)$/);
   });
 
   it("persists start time metadata for non-active in-progress tasks on update", () => {
@@ -122,8 +121,8 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain("~~#1 Transition baseline~~");
-    expect(lines[1]).toContain("30s");
-    expect(lines[1]).not.toContain("1m 30s");
+    expect(lines[1]).toContain("Δ0:30");
+    expect(lines[1]).not.toContain("Δ1:30");
   });
 
   it("renders completed tasks with ✔ icon and strikethrough", () => {
@@ -164,13 +163,55 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain("~~#1 Finished task~~");
-    expect(lines[1]).toMatch(/started .*:\d{2}:\d{2}/);
-    expect(lines[1]).toMatch(/ended .*:\d{2}:\d{2}/);
-    expect(lines[1]).toContain("1m 5s");
-    expect(lines[1]).toContain("↑ 1.5k");
-    expect(lines[1]).toContain("↓ 800");
-    expect(lines[1]).toContain("2.3k tok");
-    expect(lines[1]).toContain("12.3 tok/s");
+    expect(lines[1]).toMatch(/\(\d{2}:\d{2}:\d{2} → \d{2}:\d{2}:\d{2} Δ1:05/);
+    expect(lines[1]).toContain("↑1.5k");
+    expect(lines[1]).toContain("↓800");
+    expect(lines[1]).toContain("Σ2.3k");
+    expect(lines[1]).toContain("12.3 t/s");
+  });
+
+  it("renders completed stats in the compact 24-hour format", () => {
+    const startedAt = new Date(2026, 3, 13, 13, 48, 35).getTime();
+    const completedAt = new Date(2026, 3, 13, 13, 50, 27).getTime();
+    store.create("Compact stats", "Desc", undefined, {
+      executionStats: {
+        startedAt,
+        completedAt,
+        durationMs: 112_000,
+        inputTokens: 23_400,
+        outputTokens: 3516,
+        totalTokens: 3_347_800,
+        costUsd: 1.88,
+      },
+    });
+    store.update("1", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain(
+      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · 31.4 t/s · $1.88)",
+    );
+  });
+
+  it("renders live stats in the corresponding compact format", () => {
+    const startedAt = new Date(2026, 3, 13, 13, 48, 35).getTime();
+    vi.setSystemTime(new Date(2026, 3, 13, 13, 50, 27));
+    store.create("Compact live stats", "Desc", undefined, {
+      executionStats: {
+        startedAt,
+        inputTokens: 23_400,
+        outputTokens: 3516,
+        totalTokens: 3_347_800,
+        costUsd: 1.88,
+      },
+    });
+    store.update("1", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain(
+      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · 31.4 t/s · $1.88)",
+    );
   });
 
   it("renders persisted completed stats after widget recreation", () => {
@@ -191,13 +232,11 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(restoredUi.state);
     expect(lines[1]).toContain("~~#1 Remember stats~~");
-    expect(lines[1]).toMatch(/started .*:\d{2}:\d{2}/);
-    expect(lines[1]).toMatch(/ended .*:\d{2}:\d{2}/);
-    expect(lines[1]).toContain("5s");
-    expect(lines[1]).toContain("↑ 500");
-    expect(lines[1]).toContain("↓ 200");
-    expect(lines[1]).toContain("700 tok");
-    expect(lines[1]).toContain("40.0 tok/s");
+    expect(lines[1]).toMatch(/\(\d{2}:\d{2}:\d{2} → \d{2}:\d{2}:\d{2} Δ0:05/);
+    expect(lines[1]).toContain("↑500");
+    expect(lines[1]).toContain("↓200");
+    expect(lines[1]).toContain("Σ700");
+    expect(lines[1]).toContain("40.0 t/s");
 
     restoredWidget.dispose();
   });
@@ -216,9 +255,8 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain("~~#1 Delayed persist~~");
-    expect(lines[1]).toContain("1m 5s");
-    expect(lines[1]).toMatch(/ended .*:05:05/);
-    expect(lines[1]).not.toContain("3m 5s");
+    expect(lines[1]).toMatch(/→ \d{2}:05:05 Δ1:05/);
+    expect(lines[1]).not.toContain("Δ3:05");
   });
 
   it("rehydrates persisted in-progress tasks so completion stats survive resume", () => {
@@ -237,8 +275,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(restoredUi.state);
     expect(lines[1]).toContain("~~#1 Resume me~~");
-    expect(lines[1]).toContain("1m 5s");
-    expect(lines[1]).toMatch(/ended .*:05:05/);
+    expect(lines[1]).toMatch(/→ \d{2}:05:05 Δ1:05/);
 
     restoredWidget.dispose();
   });
@@ -262,11 +299,11 @@ describe("TaskWidget", () => {
     const lines = renderWidget(restoredUi.state);
     expect(lines[1]).toContain("◼");
     expect(lines[1]).toContain("Resume display");
-    expect(lines[1]).toContain("1m 30s");
-    expect(lines[1]).toContain("↑ 1.2k");
-    expect(lines[1]).toContain("↓ 3.4k");
-    expect(lines[1]).toContain("4.6k tok");
-    expect(lines[1]).toContain("37.8 tok/s");
+    expect(lines[1]).toContain("Δ1:30");
+    expect(lines[1]).toContain("↑1.2k");
+    expect(lines[1]).toContain("↓3.4k");
+    expect(lines[1]).toContain("Σ4.6k");
+    expect(lines[1]).toContain("37.8 t/s");
 
     restoredWidget.dispose();
   });
@@ -283,8 +320,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain("~~#1 Broken stats~~");
-    expect(lines[1]).toMatch(/started .*:\d{2}:\d{2}/);
-    expect(lines[1]).toMatch(/ended .*:\d{2}:\d{2}/);
+    expect(lines[1]).toMatch(/\(\d{2}:\d{2}:\d{2} → \d{2}:\d{2}:\d{2} Δ0:00\)$/);
   });
 
   it("backfills stats for direct pending-to-completed transitions", () => {
@@ -297,7 +333,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain("~~#1 Fast finish~~");
-    expect(lines[1]).toContain("1m 5s");
+    expect(lines[1]).toContain("Δ1:05");
     expect(lines[1]).not.toContain("↑");
     expect(lines[1]).not.toContain("↓");
   });
@@ -318,8 +354,8 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     const blockedLine = lines.find(l => l.includes("Blocked"));
-    expect(blockedLine).toContain("2m");
-    expect(blockedLine).not.toContain("3m");
+    expect(blockedLine).toContain("Δ2:00");
+    expect(blockedLine).not.toContain("Δ3:00");
   });
 
   it("renders active tasks with spinner icon, start time, and duration", () => {
@@ -331,8 +367,7 @@ describe("TaskWidget", () => {
     const lines = renderWidget(ui.state);
     // Should show activeForm text with "…" suffix
     expect(lines[1]).toContain("Processing data…");
-    expect(lines[1]).toMatch(/started .*:\d{2}:\d{2}/);
-    expect(lines[1]).toContain("0s");
+    expect(lines[1]).toMatch(/\(\d{2}:\d{2}:\d{2} Δ0:00\)$/);
     // Should NOT show ◼ for active task
     expect(lines[1]).not.toContain("◼");
   });
@@ -561,10 +596,10 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     const activeLine = lines.find(l => l.includes("Running…"));
-    expect(activeLine).toContain("↑ 1.5k");
-    expect(activeLine).toContain("↓ 800");
-    expect(activeLine).toContain("2.3k tok");
-    expect(activeLine).toContain("80.0 tok/s");
+    expect(activeLine).toContain("↑1.5k");
+    expect(activeLine).toContain("↓800");
+    expect(activeLine).toContain("Σ2.3k");
+    expect(activeLine).toContain("80.0 t/s");
   });
 
   it("tracks and renders model cost for active and completed tasks", () => {
@@ -576,7 +611,7 @@ describe("TaskWidget", () => {
 
     let lines = renderWidget(ui.state);
     let taskLine = lines.find(l => l.includes("Running costed work…"));
-    expect(taskLine).toContain("4.5k tok");
+    expect(taskLine).toContain("Σ4.5k");
     expect(taskLine).toContain("$0.012");
 
     store.update("1", { status: "completed" });
@@ -588,7 +623,7 @@ describe("TaskWidget", () => {
     });
     lines = renderWidget(ui.state);
     taskLine = lines.find(l => l.includes("Costed task"));
-    expect(taskLine).toContain("4.5k tok");
+    expect(taskLine).toContain("Σ4.5k");
     expect(taskLine).toContain("$0.012");
   });
 
@@ -609,11 +644,11 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     const activeLine = lines.find(l => l.includes("Continuing…"));
-    expect(activeLine).toContain("2m");
-    expect(activeLine).toContain("↑ 1.3k");
-    expect(activeLine).toContain("↓ 625");
-    expect(activeLine).toContain("1.9k tok");
-    expect(activeLine).toContain("5.2 tok/s");
+    expect(activeLine).toContain("Δ2:00");
+    expect(activeLine).toContain("↑1.3k");
+    expect(activeLine).toContain("↓625");
+    expect(activeLine).toContain("Σ1.9k");
+    expect(activeLine).toContain("5.2 t/s");
     expect(activeLine).toContain("$0.0063");
 
     store.update("1", { status: "completed" });
@@ -684,10 +719,10 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     // Both tasks should have the same token counts
-    expect(lines[1]).toContain("↑ 100");
-    expect(lines[1]).toContain("150 tok");
-    expect(lines[2]).toContain("↑ 100");
-    expect(lines[2]).toContain("150 tok");
+    expect(lines[1]).toContain("↑100");
+    expect(lines[1]).toContain("Σ150");
+    expect(lines[2]).toContain("↑100");
+    expect(lines[2]).toContain("Σ150");
   });
 
   it("dispose clears widget and timer", () => {
@@ -720,8 +755,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     const activeLine = lines.find(l => l.includes("Working…"));
-    expect(activeLine).toMatch(/started .*:\d{2}:\d{2}/);
-    expect(activeLine).toContain("5s");
+    expect(activeLine).toMatch(/\(\d{2}:\d{2}:\d{2} Δ0:05\)$/);
     expect(activeLine).not.toContain("↑");
     expect(activeLine).not.toContain("↓");
   });
@@ -743,7 +777,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     // Should not carry over old tokens
-    expect(lines[1]).not.toContain("↑ 100");
+    expect(lines[1]).not.toContain("↑100");
   });
 
   it("indents task lines under header", () => {
@@ -764,7 +798,7 @@ describe("TaskWidget", () => {
   });
 });
 
-describe("formatDuration (via widget rendering)", () => {
+describe("compact duration (via widget rendering)", () => {
   let store: TaskStore;
   let widget: TaskWidget;
   let ui: ReturnType<typeof mockUICtx>;
@@ -791,7 +825,7 @@ describe("formatDuration (via widget rendering)", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[1]).toContain("30s");
+    expect(lines[1]).toContain("Δ0:30");
   });
 
   it("shows hours for long durations", () => {
@@ -799,11 +833,11 @@ describe("formatDuration (via widget rendering)", () => {
     store.update("1", { status: "in_progress" });
     widget.setActiveTask("1", true);
 
-    vi.advanceTimersByTime(3_723_000); // 1h 2m 3s → "1h 2m"
+    vi.advanceTimersByTime(3_723_000); // 1h 2m 3s → "1:02:03"
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[1]).toContain("1h 2m");
+    expect(lines[1]).toContain("Δ1:02:03");
   });
 
   it("shows exact hours without minutes", () => {
@@ -815,7 +849,7 @@ describe("formatDuration (via widget rendering)", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[1]).toContain("2h)");
+    expect(lines[1]).toContain("Δ2:00:00)");
   });
 
   it("shows minutes and seconds", () => {
@@ -827,7 +861,7 @@ describe("formatDuration (via widget rendering)", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[1]).toContain("2m 49s");
+    expect(lines[1]).toContain("Δ2:49");
   });
 
   it("formats small token counts without k suffix", () => {
@@ -839,9 +873,9 @@ describe("formatDuration (via widget rendering)", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[1]).toContain("↑ 500");
-    expect(lines[1]).toContain("↓ 200");
-    expect(lines[1]).toContain("700 tok");
+    expect(lines[1]).toContain("↑500");
+    expect(lines[1]).toContain("↓200");
+    expect(lines[1]).toContain("Σ700");
   });
 
   it("formats token counts with k suffix and removes .0", () => {
@@ -853,8 +887,8 @@ describe("formatDuration (via widget rendering)", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[1]).toContain("↑ 2k");    // 2000 → "2k" (not "2.0k")
-    expect(lines[1]).toContain("↓ 4.1k");  // 4100 → "4.1k"
-    expect(lines[1]).toContain("6.1k tok");
+    expect(lines[1]).toContain("↑2k");    // 2000 → "2k" (not "2.0k")
+    expect(lines[1]).toContain("↓4.1k");  // 4100 → "4.1k"
+    expect(lines[1]).toContain("Σ6.1k");
   });
 });

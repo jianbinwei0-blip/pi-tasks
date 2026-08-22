@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   calculateOutputTokenRate,
   calculateTotalTokens,
+  formatCompactOutputTokenRate,
+  formatCompactTotalTokens,
   formatOutputTokenRate,
   formatTotalTokens,
 } from "../src/task-stats.js";
@@ -19,6 +21,12 @@ describe("total token count", () => {
 
     expect(calculateTotalTokens(stats)).toBe(1600);
     expect(formatTotalTokens(stats)).toBe("1.6k tok");
+  });
+
+  it("formats compact widget totals with sigma and truncated million precision", () => {
+    expect(formatCompactTotalTokens({ totalTokens: 3_347_800 })).toBe("Σ3.347M");
+    expect(formatCompactTotalTokens({ totalTokens: 87_600 })).toBe("Σ87.6k");
+    expect(formatCompactTotalTokens({ inputTokens: 500, outputTokens: 200 })).toBe("Σ700");
   });
 
   it.each([
@@ -43,6 +51,7 @@ describe("output token rate", () => {
 
     expect(calculateOutputTokenRate(stats)).toBeCloseTo(400 / 65);
     expect(formatOutputTokenRate(stats)).toBe("6.2 tok/s");
+    expect(formatCompactOutputTokenRate(stats)).toBe("6.2 t/s");
   });
 
   it("derives live duration from the start time", () => {

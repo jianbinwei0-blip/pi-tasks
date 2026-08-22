@@ -15,6 +15,14 @@ function compactTokenCount(tokens: number): string {
   return `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }
 
+function compactWidgetTotalTokenCount(tokens: number): string {
+  if (tokens < 1_000_000) return compactTokenCount(tokens);
+
+  // Keep three decimal places without rounding up the provider-reported total.
+  const millions = Math.trunc(tokens / 1000) / 1000;
+  return `${millions.toFixed(3).replace(/\.?(?:0+)$/, "")}M`;
+}
+
 /**
  * Return Pi's provider-reported total when available, including cache traffic.
  * Legacy task records fall back to their persisted input + output counts.
@@ -44,6 +52,12 @@ export function calculateTotalTokens(stats: TotalTokenStats): number | undefined
 export function formatTotalTokens(stats: TotalTokenStats): string | undefined {
   const totalTokens = calculateTotalTokens(stats);
   return totalTokens === undefined ? undefined : `${compactTokenCount(totalTokens)} tok`;
+}
+
+/** Format total usage for the compact widget, using sigma and M for millions. */
+export function formatCompactTotalTokens(stats: TotalTokenStats): string | undefined {
+  const totalTokens = calculateTotalTokens(stats);
+  return totalTokens === undefined ? undefined : `Σ${compactWidgetTotalTokenCount(totalTokens)}`;
 }
 
 /**
@@ -76,4 +90,13 @@ export function formatOutputTokenRate(
 ): string | undefined {
   const rate = calculateOutputTokenRate(stats, nowMs);
   return rate === undefined ? undefined : `${rate.toFixed(1)} tok/s`;
+}
+
+/** Format output-token throughput for the compact widget. */
+export function formatCompactOutputTokenRate(
+  stats: OutputTokenRateStats,
+  nowMs = Date.now(),
+): string | undefined {
+  const rate = calculateOutputTokenRate(stats, nowMs);
+  return rate === undefined ? undefined : `${rate.toFixed(1)} t/s`;
 }

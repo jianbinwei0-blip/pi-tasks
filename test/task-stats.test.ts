@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  calculateCacheHitRatio,
   calculateOutputTokenRate,
   calculateTotalTokens,
+  formatCacheHitRatio,
+  formatCompactCacheHitRatio,
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
   formatOutputTokenRate,
@@ -11,6 +14,18 @@ import {
 describe("total token count", () => {
   it("uses Pi's provider-reported total, including cache traffic", () => {
     const stats = { inputTokens: 1200, outputTokens: 400, totalTokens: 81_600 };
+
+    expect(calculateTotalTokens(stats)).toBe(81_600);
+    expect(formatTotalTokens(stats)).toBe("81.6k tok");
+  });
+
+  it("falls back to all reported token components", () => {
+    const stats = {
+      inputTokens: 1200,
+      outputTokens: 400,
+      cacheReadTokens: 78_000,
+      cacheWriteTokens: 2000,
+    };
 
     expect(calculateTotalTokens(stats)).toBe(81_600);
     expect(formatTotalTokens(stats)).toBe("81.6k tok");
@@ -34,9 +49,50 @@ describe("total token count", () => {
     { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     { inputTokens: Number.NaN, outputTokens: 100 },
     { inputTokens: -1, outputTokens: 100 },
+    { inputTokens: Number.MAX_VALUE, outputTokens: Number.MAX_VALUE },
   ])("omits unavailable or invalid totals for %j", (stats) => {
     expect(calculateTotalTokens(stats)).toBeUndefined();
     expect(formatTotalTokens(stats)).toBeUndefined();
+  });
+});
+
+describe("cache hit ratio", () => {
+  it("uses cache reads divided by all prompt tokens", () => {
+    const stats = {
+      inputTokens: 1000,
+      cacheReadTokens: 7500,
+      cacheWriteTokens: 1500,
+    };
+
+    expect(calculateCacheHitRatio(stats)).toBe(0.75);
+    expect(formatCacheHitRatio(stats)).toBe("75.0% cache hit");
+    expect(formatCompactCacheHitRatio(stats)).toBe("CH75.0%");
+  });
+
+  it("reports zero hits when the provider only writes cache tokens", () => {
+    const stats = {
+      inputTokens: 9000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 1000,
+    };
+
+    expect(calculateCacheHitRatio(stats)).toBe(0);
+    expect(formatCacheHitRatio(stats)).toBe("0.0% cache hit");
+  });
+
+  it.each([
+    {},
+    { inputTokens: 100 },
+    { inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    { inputTokens: Number.NaN, cacheReadTokens: 100 },
+    { inputTokens: -1, cacheReadTokens: 100 },
+    { inputTokens: 100, cacheReadTokens: Number.NaN },
+    { inputTokens: 100, cacheWriteTokens: -1 },
+    { inputTokens: Number.MAX_VALUE, cacheReadTokens: Number.MAX_VALUE },
+  ])("omits unavailable or invalid cache ratios for %j", (stats) => {
+    expect(calculateCacheHitRatio(stats)).toBeUndefined();
+    expect(formatCacheHitRatio(stats)).toBeUndefined();
+    expect(formatCompactCacheHitRatio(stats)).toBeUndefined();
   });
 });
 

@@ -417,6 +417,8 @@ describe("TaskStore (file-backed)", () => {
           durationMs: 60_000,
           inputTokens: 1200,
           outputTokens: 400,
+          cacheReadTokens: 2400,
+          cacheWriteTokens: 400,
         },
       },
     });
@@ -428,6 +430,8 @@ describe("TaskStore (file-backed)", () => {
       durationMs: 60_000,
       inputTokens: 1200,
       outputTokens: 400,
+      cacheReadTokens: 2400,
+      cacheWriteTokens: 400,
     });
   });
 

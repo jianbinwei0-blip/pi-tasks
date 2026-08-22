@@ -508,7 +508,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("#2");
   });
 
-  it("TaskList shows task cost, total tokens, and output rate", async () => {
+  it("TaskList shows task cost, total tokens, cache ratio, and output rate", async () => {
     await mock.executeTool("TaskCreate", { subject: "Costed", description: "desc" });
     await mock.executeTool("TaskUpdate", {
       taskId: "1",
@@ -519,13 +519,42 @@ describe("Standalone operation (no subagents extension)", () => {
           durationMs: 65_000,
           inputTokens: 1200,
           outputTokens: 400,
+          cacheReadTokens: 2400,
+          cacheWriteTokens: 400,
+          totalTokens: 4400,
           costUsd: 0.0123,
         },
       },
     });
 
     const result = await mock.executeTool("TaskList", {});
-    expect(result.content[0].text).toContain("#1 [pending] Costed [$0.012] [1.6k tok] [6.2 tok/s]");
+    expect(result.content[0].text).toContain(
+      "#1 [pending] Costed [$0.012] [4.4k tok] [60.0% cache hit] [6.2 tok/s]",
+    );
+  });
+
+  it("/tasks picker shows the cache ratio", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Cached", description: "desc" });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "1",
+      metadata: {
+        executionStats: {
+          startedAt: 1_700_000_000_000,
+          inputTokens: 1000,
+          cacheReadTokens: 3000,
+          cacheWriteTokens: 0,
+        },
+      },
+    });
+
+    const select = vi.fn()
+      .mockResolvedValueOnce("View all tasks (1)")
+      .mockImplementationOnce(async (_title, choices: string[]) => {
+        expect(choices[0]).toContain("75.0% cache hit");
+        return "← Back";
+      })
+      .mockResolvedValueOnce(undefined);
+    await mock.commands.get("tasks").handler("", { ...mockCtx(), ui: { ...mockCtx().ui, select } });
   });
 
   it("TaskGet works without subagents", async () => {
@@ -571,6 +600,9 @@ describe("Standalone operation (no subagents extension)", () => {
           durationMs: 65_000,
           inputTokens: 1200,
           outputTokens: 400,
+          cacheReadTokens: 2400,
+          cacheWriteTokens: 400,
+          totalTokens: 4400,
           costUsd: 0.0123,
         },
         note: "kept",
@@ -582,7 +614,8 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("1m 5s");
     expect(result.content[0].text).toContain("↑ 1.2k");
     expect(result.content[0].text).toContain("↓ 400");
-    expect(result.content[0].text).toContain("1.6k tok");
+    expect(result.content[0].text).toContain("4.4k tok");
+    expect(result.content[0].text).toContain("60.0% cache hit");
     expect(result.content[0].text).toContain("6.2 tok/s");
     expect(result.content[0].text).toContain("$0.012");
     expect(result.content[0].text).toContain('Metadata: {"note":"kept"}');
@@ -612,6 +645,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("↑ 1k");
     expect(result.content[0].text).toContain("↓ 500");
     expect(result.content[0].text).toContain("4.5k tok");
+    expect(result.content[0].text).toContain("75.0% cache hit");
     expect(result.content[0].text).toContain("$0.012");
   });
 
@@ -630,6 +664,25 @@ describe("Standalone operation (no subagents extension)", () => {
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).not.toContain("Execution stats:");
     expect(result.content[0].text).toContain('Metadata: {"executionStats":{"startedAt":"bad","completedAt":null}}');
+  });
+
+  it("TaskGet rejects malformed cache token stats", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Broken cache", description: "desc" });
+    await mock.executeTool("TaskUpdate", {
+      taskId: "1",
+      metadata: {
+        executionStats: {
+          startedAt: 1_700_000_000_000,
+          cacheReadTokens: "bad",
+        },
+      },
+    });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).not.toContain("Execution stats:");
+    expect(result.content[0].text).toContain(
+      'Metadata: {"executionStats":{"startedAt":1700000000000,"cacheReadTokens":"bad"}}',
+    );
   });
 
   it("TaskExecute gracefully refuses without subagents", async () => {

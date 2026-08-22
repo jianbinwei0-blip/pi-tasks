@@ -29,7 +29,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { formatOutputTokenRate, formatTotalTokens } from "./task-stats.js";
+import { formatCacheHitRatio, formatOutputTokenRate, formatTotalTokens } from "./task-stats.js";
 import { compareTaskIds, TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { isCompletedTaskExecutionStats, isTaskExecutionStats, type TaskExecutionStats } from "./types.js";
@@ -98,6 +98,8 @@ function formatExecutionUsageParts(stats: TaskExecutionStats): string[] {
   if ((stats.outputTokens ?? 0) > 0) parts.push(`↓ ${formatTokens(stats.outputTokens ?? 0)}`);
   const totalTokens = formatTotalTokens(stats);
   if (totalTokens) parts.push(totalTokens);
+  const cacheHitRatio = formatCacheHitRatio(stats);
+  if (cacheHitRatio) parts.push(cacheHitRatio);
   const tokenRate = formatOutputTokenRate(stats);
   if (tokenRate) parts.push(tokenRate);
   if (stats.costUsd !== undefined) parts.push(formatCostUsd(stats.costUsd));
@@ -429,6 +431,8 @@ export default function (pi: ExtensionAPI) {
         msg.usage.output ?? 0,
         extractUsageCost(msg.usage),
         extractUsageTotalTokens(msg.usage),
+        msg.usage.cacheRead ?? 0,
+        msg.usage.cacheWrite ?? 0,
       );
     }
   });
@@ -655,7 +659,7 @@ Returns a summary of each task:
 - **status**: 'pending', 'in_progress', or 'completed'
 - **owner**: Agent ID if assigned, empty if available
 - **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
-- **execution stats**: Cost, total token count, and average output-token rate when available
+- **execution stats**: Cost, total token count, cache hit ratio, and average output-token rate when available
 
 Use TaskGet with a specific task ID to view full details including description and comments.`,
     parameters: Type.Object({}),
@@ -689,6 +693,10 @@ Use TaskGet with a specific task ID to view full details including description a
         const totalTokens = stats ? formatTotalTokens(stats) : undefined;
         if (totalTokens) {
           line += ` [${totalTokens}]`;
+        }
+        const cacheHitRatio = stats ? formatCacheHitRatio(stats) : undefined;
+        if (cacheHitRatio) {
+          line += ` [${cacheHitRatio}]`;
         }
         const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
         if (tokenRate) {
@@ -737,7 +745,7 @@ Returns full task details:
 - **parent**: Parent task ID when this is a subtask
 - **blocks**: Tasks waiting on this one to complete
 - **blockedBy**: Tasks that must complete before this one can start
-- **execution stats**: Timing, input/output/total tokens, average output-token rate, and cost when available
+- **execution stats**: Timing, input/output/total tokens, cache hit ratio, average output-token rate, and cost when available
 
 ## Tips
 
@@ -1250,10 +1258,12 @@ Set up task dependencies:
           const costSuffix = stats?.costUsd !== undefined ? ` · ${formatCostUsd(stats.costUsd)}` : "";
           const totalTokens = stats ? formatTotalTokens(stats) : undefined;
           const totalSuffix = totalTokens ? ` · ${totalTokens}` : "";
+          const cacheHitRatio = stats ? formatCacheHitRatio(stats) : undefined;
+          const cacheSuffix = cacheHitRatio ? ` · ${cacheHitRatio}` : "";
           const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
           const rateSuffix = tokenRate ? ` · ${tokenRate}` : "";
           const indent = t.parentTaskId ? "  " : "";
-          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}${totalSuffix}${rateSuffix}`;
+          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}${totalSuffix}${cacheSuffix}${rateSuffix}`;
         });
         choices.push("← Back");
 

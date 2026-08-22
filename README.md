@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, input/output and total token counts, average output-token rate, and per-task model cost
+- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, input/output and total token counts, cache hit ratio, average output-token rate, and per-task model cost
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt task creation modes** — choose model-discretionary task creation, manual-only task tracking, or required model-owned task creation for every user prompt
 - **Prompt-scoped subtasks** — in `always` mode, extra tasks created for a complex prompt are nested under its prompt task as `#13.1`, `#13.2`, and so on instead of consuming `#14`, `#15`, …
@@ -50,8 +50,8 @@ The extension renders a persistent widget above the editor:
 
 ```
 ● 4 tasks (1 done, 1 in progress, 2 open)
-  ✔ #1 Design the flux capacitor (13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · 31.4 t/s · $1.88)
-  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k · 7.1 t/s · $0.030)
+  ✔ #1 Design the flux capacitor (13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · CH99.3% · 31.4 t/s · $1.88)
+  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k · CH94.8% · 7.1 t/s · $0.030)
   ◻ #3 Install flux capacitor in DeLorean › blocked by #1
   ◻ #4 Test time travel at 88 mph › blocked by #2, #3
 ```
@@ -61,11 +61,11 @@ The extension renders a persistent widget above the editor:
 | `✔` | Completed (strikethrough + dim) |
 | `◼` | In-progress (not actively executing) |
 | `◻` | Pending |
-| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, average output-token rate, and model cost when available) |
+| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, average output-token rate, and model cost when available) |
 
-Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. `↑` and `↓` are input and output tokens, `Σ` is total tokens, and `t/s` is average output-token throughput.
+Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. `↑` and `↓` are input and output tokens, `Σ` is total tokens, `CH` is the task-wide cache hit ratio, and `t/s` is average output-token throughput.
 
-Total tokens use Pi's provider-reported `usage.totalTokens`, which includes input, output, cache-read, and cache-write tokens. Legacy task records without that field fall back to input + output. Million-scale widget totals use three truncated decimal places, while the tool views retain their labeled `tok`/`tok/s` format. Token rate is calculated as output tokens divided by the task's wall-clock execution duration. It is a task-wide average, not raw provider inference throughput, and appears once both output usage and a positive duration are available.
+Total tokens use Pi's provider-reported `usage.totalTokens`, which includes input, output, cache-read, and cache-write tokens. Component-aware records without that field sum all four categories; legacy records fall back to input + output. Million-scale widget totals use three truncated decimal places, while the tool views retain their labeled `tok`/`tok/s` format. Cache hit ratio follows Pi's formula: cache-read tokens divided by all prompt tokens (input + cache-read + cache-write), and appears once the provider reports cache activity. Token rate is calculated as output tokens divided by the task's wall-clock execution duration. It is a task-wide average, not raw provider inference throughput, and appears once both output usage and a positive duration are available.
 
 ### Widget display settings
 
@@ -114,7 +114,7 @@ List all tasks with status, owner, and blocked-by info.
 
 ```
 #1 [pending] Fix authentication bug
-#2 [in_progress] Write unit tests (agent-1) [$0.012] [81.6k tok] [6.2 tok/s]
+#2 [in_progress] Write unit tests (agent-1) [$0.012] [81.6k tok] [94.8% cache hit] [6.2 tok/s]
 #3 [pending] Update docs [blocked by #1, #2]
 ```
 
@@ -134,7 +134,7 @@ Blocked by: #13
 Blocks: #13.2
 ```
 
-Shows owner (if set), open (non-completed) dependency edges, execution timing/input/output/total tokens/average output-token rate/cost when available, and non-empty metadata as JSON.
+Shows owner (if set), open (non-completed) dependency edges, execution timing/input/output/total tokens/cache hit ratio/average output-token rate/cost when available, and non-empty metadata as JSON.
 
 ### `TaskUpdate`
 
@@ -384,7 +384,7 @@ src/
 ├── index.ts            # Extension entry: 7 tools + /tasks command + widget + subagent integration
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
-├── task-stats.ts       # Derived execution statistics such as total tokens and output-token rate
+├── task-stats.ts       # Derived execution statistics such as totals, cache ratio, and output-token rate
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
 ├── tasks-config.ts     # Config loading/saving (global defaults + pi-extmgr settings + project tasks-config.json)
 ├── process-tracker.ts  # Background process output buffering and stop

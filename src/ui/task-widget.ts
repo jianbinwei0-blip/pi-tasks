@@ -11,6 +11,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
   calculateTotalTokens,
+  formatCompactCacheHitRatio,
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
 } from "../task-stats.js";
@@ -80,6 +81,8 @@ export interface TaskMetrics {
   startedAt: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
   costUsd: number;
 }
@@ -138,6 +141,8 @@ function formatWidgetStats(
 
   const statGroups = [timeline];
   if (tokenParts.length > 0) statGroups.push(tokenParts.join(" "));
+  const cacheHitRatio = formatCompactCacheHitRatio(stats);
+  if (cacheHitRatio) statGroups.push(cacheHitRatio);
   const tokenRate = formatCompactOutputTokenRate(stats, now);
   if (tokenRate) statGroups.push(tokenRate);
   if (stats.costUsd !== undefined && (stats.completedAt !== undefined || stats.costUsd > 0)) {
@@ -182,6 +187,8 @@ export class TaskWidget {
       startedAt,
       inputTokens: existingStats?.inputTokens ?? 0,
       outputTokens: existingStats?.outputTokens ?? 0,
+      cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
+      cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
       totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
     };
     if (existingStats?.costUsd !== undefined) {
@@ -207,6 +214,8 @@ export class TaskWidget {
         durationMs: Math.max(0, completedAt - startedAt),
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
+        cacheReadTokens: metrics.cacheReadTokens,
+        cacheWriteTokens: metrics.cacheWriteTokens,
         totalTokens: metrics.totalTokens,
       };
       const costUsd = metrics.costUsd > 0 ? metrics.costUsd : existingStats?.costUsd;
@@ -231,6 +240,8 @@ export class TaskWidget {
       durationMs: Math.max(0, task.updatedAt - startedAt),
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 0,
     };
   }
@@ -263,6 +274,8 @@ export class TaskWidget {
           startedAt,
           inputTokens: existingStats?.inputTokens ?? 0,
           outputTokens: existingStats?.outputTokens ?? 0,
+          cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
+          cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
           totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
           costUsd: existingStats?.costUsd ?? 0,
         });
@@ -306,6 +319,8 @@ export class TaskWidget {
           startedAt,
           inputTokens: existingStats?.inputTokens ?? 0,
           outputTokens: existingStats?.outputTokens ?? 0,
+          cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
+          cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
           totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
           costUsd: existingStats?.costUsd ?? 0,
         });
@@ -328,6 +343,8 @@ export class TaskWidget {
     outputTokens: number,
     costUsd = 0,
     totalTokens = inputTokens + outputTokens,
+    cacheReadTokens = 0,
+    cacheWriteTokens = 0,
   ) {
     // Distribute to all currently active tasks
     for (const id of this.activeTaskIds) {
@@ -335,6 +352,12 @@ export class TaskWidget {
       if (m) {
         m.inputTokens += inputTokens;
         m.outputTokens += outputTokens;
+        if (Number.isFinite(cacheReadTokens) && cacheReadTokens > 0) {
+          m.cacheReadTokens += cacheReadTokens;
+        }
+        if (Number.isFinite(cacheWriteTokens) && cacheWriteTokens > 0) {
+          m.cacheWriteTokens += cacheWriteTokens;
+        }
         if (Number.isFinite(totalTokens) && totalTokens > 0) {
           m.totalTokens += totalTokens;
         }

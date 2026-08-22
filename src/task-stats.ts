@@ -7,7 +7,12 @@ export type OutputTokenRateStats = Pick<
 
 export type TotalTokenStats = Pick<
   TaskExecutionStats,
-  "inputTokens" | "outputTokens" | "totalTokens"
+  "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens" | "totalTokens"
+>;
+
+export type CacheHitRatioStats = Pick<
+  TaskExecutionStats,
+  "inputTokens" | "cacheReadTokens" | "cacheWriteTokens"
 >;
 
 function compactTokenCount(tokens: number): string {
@@ -25,7 +30,7 @@ function compactWidgetTotalTokenCount(tokens: number): string {
 
 /**
  * Return Pi's provider-reported total when available, including cache traffic.
- * Legacy task records fall back to their persisted input + output counts.
+ * Component-aware records fall back to all token categories; legacy records use input + output.
  */
 export function calculateTotalTokens(stats: TotalTokenStats): number | undefined {
   const reportedTotal = stats.totalTokens;
@@ -33,19 +38,18 @@ export function calculateTotalTokens(stats: TotalTokenStats): number | undefined
     return reportedTotal;
   }
 
-  const inputTokens = stats.inputTokens ?? 0;
-  const outputTokens = stats.outputTokens ?? 0;
-  if (
-    !Number.isFinite(inputTokens) ||
-    inputTokens < 0 ||
-    !Number.isFinite(outputTokens) ||
-    outputTokens < 0
-  ) {
+  const tokenComponents = [
+    stats.inputTokens ?? 0,
+    stats.outputTokens ?? 0,
+    stats.cacheReadTokens ?? 0,
+    stats.cacheWriteTokens ?? 0,
+  ];
+  if (tokenComponents.some(tokens => !Number.isFinite(tokens) || tokens < 0)) {
     return undefined;
   }
 
-  const fallbackTotal = inputTokens + outputTokens;
-  return fallbackTotal > 0 ? fallbackTotal : undefined;
+  const fallbackTotal = tokenComponents.reduce((total, tokens) => total + tokens, 0);
+  return Number.isFinite(fallbackTotal) && fallbackTotal > 0 ? fallbackTotal : undefined;
 }
 
 /** Format a task's total usage as a compact token count. */
@@ -58,6 +62,45 @@ export function formatTotalTokens(stats: TotalTokenStats): string | undefined {
 export function formatCompactTotalTokens(stats: TotalTokenStats): string | undefined {
   const totalTokens = calculateTotalTokens(stats);
   return totalTokens === undefined ? undefined : `Σ${compactWidgetTotalTokenCount(totalTokens)}`;
+}
+
+/**
+ * Calculate task-wide prompt cache hits using Pi's cache-read / prompt-token formula.
+ * Returns undefined until the provider reports cache reads or writes.
+ */
+export function calculateCacheHitRatio(stats: CacheHitRatioStats): number | undefined {
+  const inputTokens = stats.inputTokens ?? 0;
+  const cacheReadTokens = stats.cacheReadTokens ?? 0;
+  const cacheWriteTokens = stats.cacheWriteTokens ?? 0;
+  if (
+    !Number.isFinite(inputTokens) ||
+    inputTokens < 0 ||
+    !Number.isFinite(cacheReadTokens) ||
+    cacheReadTokens < 0 ||
+    !Number.isFinite(cacheWriteTokens) ||
+    cacheWriteTokens < 0 ||
+    cacheReadTokens + cacheWriteTokens <= 0
+  ) {
+    return undefined;
+  }
+
+  const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (!Number.isFinite(promptTokens) || promptTokens <= 0) return undefined;
+
+  const ratio = cacheReadTokens / promptTokens;
+  return Number.isFinite(ratio) && ratio >= 0 && ratio <= 1 ? ratio : undefined;
+}
+
+/** Format the cache hit ratio as a labeled percentage. */
+export function formatCacheHitRatio(stats: CacheHitRatioStats): string | undefined {
+  const ratio = calculateCacheHitRatio(stats);
+  return ratio === undefined ? undefined : `${(ratio * 100).toFixed(1)}% cache hit`;
+}
+
+/** Format the cache hit ratio for the compact widget. */
+export function formatCompactCacheHitRatio(stats: CacheHitRatioStats): string | undefined {
+  const ratio = calculateCacheHitRatio(stats);
+  return ratio === undefined ? undefined : `CH${(ratio * 100).toFixed(1)}%`;
 }
 
 /**

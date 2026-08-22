@@ -103,6 +103,8 @@ describe("TaskWidget", () => {
       startedAt: 1776092700000,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 0,
     });
   });
@@ -145,6 +147,8 @@ describe("TaskWidget", () => {
       startedAt: 1776092640000,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
       totalTokens: 0,
     });
   });
@@ -180,6 +184,8 @@ describe("TaskWidget", () => {
         durationMs: 112_000,
         inputTokens: 23_400,
         outputTokens: 3516,
+        cacheReadTokens: 3_320_884,
+        cacheWriteTokens: 0,
         totalTokens: 3_347_800,
         costUsd: 1.88,
       },
@@ -189,7 +195,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain(
-      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · 31.4 t/s · $1.88)",
+      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · CH99.3% · 31.4 t/s · $1.88)",
     );
   });
 
@@ -201,6 +207,8 @@ describe("TaskWidget", () => {
         startedAt,
         inputTokens: 23_400,
         outputTokens: 3516,
+        cacheReadTokens: 3_320_884,
+        cacheWriteTokens: 0,
         totalTokens: 3_347_800,
         costUsd: 1.88,
       },
@@ -210,7 +218,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain(
-      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · 31.4 t/s · $1.88)",
+      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · CH99.3% · 31.4 t/s · $1.88)",
     );
   });
 
@@ -303,6 +311,7 @@ describe("TaskWidget", () => {
     expect(lines[1]).toContain("↑1.2k");
     expect(lines[1]).toContain("↓3.4k");
     expect(lines[1]).toContain("Σ4.6k");
+    expect(lines[1]).not.toContain("CH");
     expect(lines[1]).toContain("37.8 t/s");
 
     restoredWidget.dispose();
@@ -602,28 +611,60 @@ describe("TaskWidget", () => {
     expect(activeLine).toContain("80.0 t/s");
   });
 
+  it("aggregates and persists cache usage across turns", () => {
+    store.create("Cached task", "Desc", "Using cache");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    widget.addTokenUsage(1000, 500, 0, 4500, 3000, 0);
+    widget.addTokenUsage(500, 300, 0, 2300, 500, 1000);
+
+    let lines = renderWidget(ui.state);
+    let taskLine = lines.find(l => l.includes("Using cache…"));
+    expect(taskLine).toContain("Σ6.8k");
+    expect(taskLine).toContain("CH58.3%");
+
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      inputTokens: 1500,
+      outputTokens: 800,
+      cacheReadTokens: 3500,
+      cacheWriteTokens: 1000,
+      totalTokens: 6800,
+    });
+    lines = renderWidget(ui.state);
+    taskLine = lines.find(l => l.includes("Cached task"));
+    expect(taskLine).toContain("CH58.3%");
+  });
+
   it("tracks and renders model cost for active and completed tasks", () => {
     store.create("Costed task", "Desc", "Running costed work");
     store.update("1", { status: "in_progress" });
     widget.setActiveTask("1", true);
 
-    widget.addTokenUsage(1000, 500, 0.0123, 4500);
+    widget.addTokenUsage(1000, 500, 0.0123, 4500, 3000, 0);
 
     let lines = renderWidget(ui.state);
     let taskLine = lines.find(l => l.includes("Running costed work…"));
     expect(taskLine).toContain("Σ4.5k");
+    expect(taskLine).toContain("CH75.0%");
     expect(taskLine).toContain("$0.012");
 
     store.update("1", { status: "completed" });
     widget.setActiveTask("1", false);
 
     expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      cacheReadTokens: 3000,
+      cacheWriteTokens: 0,
       totalTokens: 4500,
       costUsd: 0.0123,
     });
     lines = renderWidget(ui.state);
     taskLine = lines.find(l => l.includes("Costed task"));
     expect(taskLine).toContain("Σ4.5k");
+    expect(taskLine).toContain("CH75.0%");
     expect(taskLine).toContain("$0.012");
   });
 

@@ -100,7 +100,7 @@ export function formatCacheHitRatio(stats: CacheHitRatioStats): string | undefin
 /** Format the cache hit ratio for the compact widget. */
 export function formatCompactCacheHitRatio(stats: CacheHitRatioStats): string | undefined {
   const ratio = calculateCacheHitRatio(stats);
-  return ratio === undefined ? undefined : `↻${(ratio * 100).toFixed(1)}%`;
+  return ratio === undefined ? undefined : `⨀${(ratio * 100).toFixed(1)}%`;
 }
 
 /**

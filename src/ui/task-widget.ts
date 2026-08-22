@@ -138,11 +138,11 @@ function formatWidgetStats(
   if ((stats.outputTokens ?? 0) > 0) tokenParts.push(`↓${formatTokens(stats.outputTokens ?? 0)}`);
   const totalTokens = formatCompactTotalTokens(stats);
   if (totalTokens) tokenParts.push(totalTokens);
+  const cacheHitRatio = formatCompactCacheHitRatio(stats);
+  if (cacheHitRatio) tokenParts.push(cacheHitRatio);
 
   const statGroups = [timeline];
   if (tokenParts.length > 0) statGroups.push(tokenParts.join(" "));
-  const cacheHitRatio = formatCompactCacheHitRatio(stats);
-  if (cacheHitRatio) statGroups.push(cacheHitRatio);
   const tokenRate = formatCompactOutputTokenRate(stats, now);
   if (tokenRate) statGroups.push(tokenRate);
   if (stats.costUsd !== undefined && (stats.completedAt !== undefined || stats.costUsd > 0)) {

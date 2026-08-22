@@ -50,8 +50,8 @@ The extension renders a persistent widget above the editor:
 
 ```
 ● 4 tasks (1 done, 1 in progress, 2 open)
-  ✔ #1 Design the flux capacitor (13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · CH99.3% · 31.4 t/s · $1.88)
-  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k · CH94.8% · 7.1 t/s · $0.030)
+  ✔ #1 Design the flux capacitor (13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · ↻99.3% · 31.4 t/s · $1.88)
+  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k · ↻94.8% · 7.1 t/s · $0.030)
   ◻ #3 Install flux capacitor in DeLorean › blocked by #1
   ◻ #4 Test time travel at 88 mph › blocked by #2, #3
 ```
@@ -63,7 +63,7 @@ The extension renders a persistent widget above the editor:
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, average output-token rate, and model cost when available) |
 
-Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. `↑` and `↓` are input and output tokens, `Σ` is total tokens, `CH` is the task-wide cache hit ratio, and `t/s` is average output-token throughput.
+Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. `↑` and `↓` are input and output tokens, `Σ` is total tokens, `↻` is the task-wide cache hit ratio, and `t/s` is average output-token throughput.
 
 Total tokens use Pi's provider-reported `usage.totalTokens`, which includes input, output, cache-read, and cache-write tokens. Component-aware records without that field sum all four categories; legacy records fall back to input + output. Million-scale widget totals use three truncated decimal places, while the tool views retain their labeled `tok`/`tok/s` format. Cache hit ratio follows Pi's formula: cache-read tokens divided by all prompt tokens (input + cache-read + cache-write), and appears once the provider reports cache activity. Token rate is calculated as output tokens divided by the task's wall-clock execution duration. It is a task-wide average, not raw provider inference throughput, and appears once both output usage and a positive duration are available.
 

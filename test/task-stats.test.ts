@@ -66,7 +66,7 @@ describe("cache hit ratio", () => {
 
     expect(calculateCacheHitRatio(stats)).toBe(0.75);
     expect(formatCacheHitRatio(stats)).toBe("75.0% cache hit");
-    expect(formatCompactCacheHitRatio(stats)).toBe("CH75.0%");
+    expect(formatCompactCacheHitRatio(stats)).toBe("↻75.0%");
   });
 
   it("reports zero hits when the provider only writes cache tokens", () => {

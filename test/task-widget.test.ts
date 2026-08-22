@@ -195,7 +195,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain(
-      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · CH99.3% · 31.4 t/s · $1.88)",
+      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · ↻99.3% · 31.4 t/s · $1.88)",
     );
   });
 
@@ -218,7 +218,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain(
-      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · CH99.3% · 31.4 t/s · $1.88)",
+      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M · ↻99.3% · 31.4 t/s · $1.88)",
     );
   });
 
@@ -311,7 +311,7 @@ describe("TaskWidget", () => {
     expect(lines[1]).toContain("↑1.2k");
     expect(lines[1]).toContain("↓3.4k");
     expect(lines[1]).toContain("Σ4.6k");
-    expect(lines[1]).not.toContain("CH");
+    expect(lines[1]).not.toContain("↻");
     expect(lines[1]).toContain("37.8 t/s");
 
     restoredWidget.dispose();
@@ -622,7 +622,7 @@ describe("TaskWidget", () => {
     let lines = renderWidget(ui.state);
     let taskLine = lines.find(l => l.includes("Using cache…"));
     expect(taskLine).toContain("Σ6.8k");
-    expect(taskLine).toContain("CH58.3%");
+    expect(taskLine).toContain("↻58.3%");
 
     store.update("1", { status: "completed" });
     widget.setActiveTask("1", false);
@@ -636,7 +636,7 @@ describe("TaskWidget", () => {
     });
     lines = renderWidget(ui.state);
     taskLine = lines.find(l => l.includes("Cached task"));
-    expect(taskLine).toContain("CH58.3%");
+    expect(taskLine).toContain("↻58.3%");
   });
 
   it("tracks and renders model cost for active and completed tasks", () => {
@@ -649,7 +649,7 @@ describe("TaskWidget", () => {
     let lines = renderWidget(ui.state);
     let taskLine = lines.find(l => l.includes("Running costed work…"));
     expect(taskLine).toContain("Σ4.5k");
-    expect(taskLine).toContain("CH75.0%");
+    expect(taskLine).toContain("↻75.0%");
     expect(taskLine).toContain("$0.012");
 
     store.update("1", { status: "completed" });
@@ -664,7 +664,7 @@ describe("TaskWidget", () => {
     lines = renderWidget(ui.state);
     taskLine = lines.find(l => l.includes("Costed task"));
     expect(taskLine).toContain("Σ4.5k");
-    expect(taskLine).toContain("CH75.0%");
+    expect(taskLine).toContain("↻75.0%");
     expect(taskLine).toContain("$0.012");
   });
 

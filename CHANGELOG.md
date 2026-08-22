@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-task model cost display** — task execution stats now capture `usage.cost.total` from pi assistant turns and show the resulting USD cost in the persistent widget, `TaskList`, and `TaskGet` whenever cost data is available.
 
 ### Changed
+- **Compact cache-ratio marker** — widget cache hit ratios now use the monochrome `↻` marker directly before the percentage (for example, `↻99.2%`) to match the existing `↑`, `↓`, and `Σ` stats glyphs.
 - **Compact widget execution stats** — task lines now use 24-hour `start → end Δduration` timing, grouped `↑input ↓output Σtotal` token counts, abbreviated `t/s` throughput, and million-scale totals such as `Σ3.347M`. Running tasks use the corresponding `start Δelapsed` form.
 - **Layered task settings** — pi-tasks now reads global defaults from `~/.pi/agent/extensions/pi-tasks.json` (plus legacy `tasks-config.json`) and pi-extmgr package settings before applying the project `<cwd>/.pi/tasks-config.json` override. `/tasks` → Settings writes the project override.
 - **Direct GitHub install support for the fork** — package metadata and install docs now point at `jianbinwei0-blip/pi-tasks`, with `pi install https://github.com/jianbinwei0-blip/pi-tasks` as the primary install path.

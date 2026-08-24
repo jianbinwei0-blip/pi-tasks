@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Active-time token rates** — foreground task throughput now divides output tokens by accumulated `agent_start` → `agent_end` time, excluding idle waits for the user's next prompt; autonomous background subagents continue to use their uninterrupted launch-to-completion time.
 - **Consistent token-stat precision** — every decimal token statistic now uses one digit after the decimal point, including input, output, total, cache-hit, and throughput values; whole compact counts still omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`).
 - **Compact token-rate spacing** — widget throughput now includes a space before the `t/s` unit (for example, `0.2 t/s`).
 - **Status-sorted top hiding no longer hides unfinished work** — when `sortOrder` is `status` and `hiddenAt` is `top`, the widget now collapses completed tasks only. If unfinished tasks exceed `maxVisible`, they all remain visible.
@@ -15,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Per-task cache hit ratio** — task execution stats now persist cache-read/cache-write usage and show the task-wide cache hit ratio in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker using Pi's cache-read / prompt-token formula.
 - **Per-task total token count** — task execution stats now persist Pi's provider-reported total (input + output + cache-read + cache-write) and show it in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker. Component-aware records sum all token categories when no total is reported; legacy stats fall back to input + output.
-- **Per-task output-token rate** — task execution stats now show average output tokens per second (`tok/s`) in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker once token usage and a positive task duration are available.
+- **Per-task output-token rate** — task execution stats now show average output tokens per second (`tok/s`) in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker once token usage and a positive active duration are available.
 - **Oldest-first auto-clear mode** — `autoClearCompleted: "oldest"` removes only enough least-recently-updated completed tasks to bring the total task count down to `maxVisible`. Unfinished tasks are never removed, even when they alone exceed the limit.
 - **Prompt-scoped subtasks in `always` mode** — the first task created (or existing task moved to `in_progress`) becomes the prompt parent. Additional `TaskCreate` calls for that prompt now receive hierarchical IDs such as `#13.1` and `#13.2`; the next prompt resumes top-level numbering at `#14`. Parent links and per-parent counters persist in task-store files, with migration for existing stores.
 - **Prompt task creation modes** — new `taskCreationMode` setting with `model` (default/current model-discretionary behavior), `manual` (no prompt-level auto tasks and no reminder injection), and `always` (require the model to create/update an appropriately titled task for every user prompt, including simple/trivial ones). Configurable via pi-extmgr package configuration, project-locally via `/tasks` → Settings / `.pi/tasks-config.json`, and JSON defaults at `~/.pi/agent/extensions/pi-tasks.json`.

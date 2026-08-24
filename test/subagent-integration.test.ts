@@ -649,6 +649,45 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("$0.012");
   });
 
+  it("excludes the wait between foreground agent runs from output-token rate", async () => {
+    let now = Date.parse("2026-04-13T15:04:00Z");
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    try {
+      await mock.fireLifecycle("agent_start", {});
+      await mock.executeTool("TaskCreate", { subject: "Multi-prompt", description: "desc" });
+      await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+
+      now += 10_000;
+      await mock.fireLifecycle("turn_end", {
+        message: {
+          role: "assistant",
+          usage: { input: 0, output: 100, totalTokens: 100 },
+        },
+      });
+      await mock.fireLifecycle("agent_end", { messages: [] });
+
+      now += 50_000;
+      await mock.fireLifecycle("agent_start", {});
+      now += 10_000;
+      await mock.fireLifecycle("turn_end", {
+        message: {
+          role: "assistant",
+          usage: { input: 0, output: 100, totalTokens: 100 },
+        },
+      });
+      await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+      await mock.fireLifecycle("agent_end", { messages: [] });
+
+      const result = await mock.executeTool("TaskGet", { taskId: "1" });
+      expect(result.content[0].text).toContain("1m 10s");
+      expect(result.content[0].text).toContain("10.0 tok/s");
+      expect(result.content[0].text).not.toContain("2.9 tok/s");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("TaskGet leaves malformed execution stats in raw metadata", async () => {
     await mock.executeTool("TaskCreate", { subject: "Broken", description: "desc" });
     await mock.executeTool("TaskUpdate", {

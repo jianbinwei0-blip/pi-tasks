@@ -422,6 +422,16 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── Usage tracking ──
+  // Accumulate throughput time only while the foreground agent is running. This excludes
+  // idle gaps between agent_end and the user's next prompt. Background subagents remain
+  // continuously active from launch until their completion event.
+  pi.on("agent_start", async () => {
+    widget.setAgentActive(true);
+  });
+  pi.on("agent_end", async () => {
+    widget.setAgentActive(false);
+  });
+
   // Feed per-turn token counts and model cost from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
@@ -659,7 +669,7 @@ Returns a summary of each task:
 - **status**: 'pending', 'in_progress', or 'completed'
 - **owner**: Agent ID if assigned, empty if available
 - **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
-- **execution stats**: Cost, total token count, cache hit ratio, and average output-token rate when available
+- **execution stats**: Cost, total token count, cache hit ratio, and active-time output-token rate when available
 
 Use TaskGet with a specific task ID to view full details including description and comments.`,
     parameters: Type.Object({}),
@@ -745,7 +755,7 @@ Returns full task details:
 - **parent**: Parent task ID when this is a subtask
 - **blocks**: Tasks waiting on this one to complete
 - **blockedBy**: Tasks that must complete before this one can start
-- **execution stats**: Timing, input/output/total tokens, cache hit ratio, average output-token rate, and cost when available
+- **execution stats**: Timing, input/output/total tokens, cache hit ratio, active-time output-token rate, and cost when available
 
 ## Tips
 

@@ -120,6 +120,20 @@ describe("output token rate", () => {
     expect(formatCompactOutputTokenRate(stats)).toBe("6.2 t/s");
   });
 
+  it("uses accumulated active agent time instead of wall-clock duration", () => {
+    const stats = {
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_065_000,
+      durationMs: 65_000,
+      activeDurationMs: 20_000,
+      outputTokens: 400,
+    };
+
+    expect(calculateOutputTokenRate(stats)).toBe(20);
+    expect(formatOutputTokenRate(stats)).toBe("20.0 tok/s");
+    expect(formatCompactOutputTokenRate(stats)).toBe("20.0 t/s");
+  });
+
   it("derives live duration from the start time", () => {
     const stats = { startedAt: 10_000, outputTokens: 250 };
 

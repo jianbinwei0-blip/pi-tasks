@@ -54,6 +54,7 @@ describe("TaskWidget", () => {
     widget = new TaskWidget(store);
     ui = mockUICtx();
     widget.setUICtx(ui.ctx);
+    widget.setAgentActive(true);
   });
 
   afterEach(() => {
@@ -172,6 +173,55 @@ describe("TaskWidget", () => {
     expect(lines[1]).toContain("↓800");
     expect(lines[1]).toContain("Σ2.3k");
     expect(lines[1]).toContain("12.3 t/s");
+  });
+
+  it("excludes time waiting for the next user prompt from token speed", () => {
+    vi.setSystemTime(new Date("2026-04-13T15:04:00Z"));
+    store.create("Multi-prompt task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(0, 100);
+    widget.setAgentActive(false);
+
+    vi.advanceTimersByTime(50_000);
+    let lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("Δ1:00");
+    expect(lines[1]).toContain("10.0 t/s");
+
+    widget.setAgentActive(true);
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(0, 100);
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      durationMs: 70_000,
+      activeDurationMs: 20_000,
+      outputTokens: 200,
+    });
+    lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("Δ1:10");
+    expect(lines[1]).toContain("10.0 t/s");
+  });
+
+  it("keeps autonomous background-agent time continuous", () => {
+    widget.setAgentActive(false);
+    store.create("Background task", "Desc", "Running", { agentId: "agent-1" });
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(0, 100);
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      activeDurationMs: 10_000,
+      outputTokens: 100,
+    });
+    expect(renderWidget(ui.state)[1]).toContain("10.0 t/s");
   });
 
   it("renders completed stats in the compact 24-hour format", () => {

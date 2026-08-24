@@ -80,6 +80,9 @@ const DEFAULT_MAX_VISIBLE_TASKS = 10;
 /** Per-task runtime metrics (elapsed time, token usage/rate, and model cost). */
 export interface TaskMetrics {
   startedAt: number;
+  activeDurationMs: number;
+  activeStartedAt?: number;
+  continuousActivity: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -155,6 +158,8 @@ export class TaskWidget {
   private widgetInterval: ReturnType<typeof setInterval> | undefined;
   /** IDs of tasks currently being actively executed (show spinner). */
   private activeTaskIds = new Set<string>();
+  /** Whether the foreground Pi agent is currently inside an agent run. */
+  private agentActive = false;
   /** Per-task runtime metrics keyed by task ID. */
   private metrics = new Map<string, TaskMetrics>();
   /** Cached TUI instance for requestRender() calls. */
@@ -173,6 +178,110 @@ export class TaskWidget {
 
   setUICtx(ctx: UICtx) {
     this.uiCtx = ctx;
+  }
+
+  private initialActiveDurationMs(existingStats: TaskExecutionStats | undefined, now: number): number {
+    if (existingStats?.activeDurationMs !== undefined) {
+      return Math.max(0, existingStats.activeDurationMs);
+    }
+    if (existingStats?.durationMs !== undefined) {
+      return Math.max(0, existingStats.durationMs);
+    }
+    if ((existingStats?.outputTokens ?? 0) > 0) {
+      return Math.max(0, (existingStats?.completedAt ?? now) - (existingStats?.startedAt ?? now));
+    }
+    return 0;
+  }
+
+  private createMetrics(
+    task: Task,
+    startedAt: number,
+    existingStats?: TaskExecutionStats,
+    now = Date.now(),
+  ): TaskMetrics {
+    const metrics: TaskMetrics = {
+      startedAt,
+      activeDurationMs: this.initialActiveDurationMs(existingStats, now),
+      continuousActivity: Boolean(task.metadata?.agentId),
+      inputTokens: existingStats?.inputTokens ?? 0,
+      outputTokens: existingStats?.outputTokens ?? 0,
+      cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
+      cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
+      totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
+      costUsd: existingStats?.costUsd ?? 0,
+    };
+    if (this.activeTaskIds.has(task.id) && (metrics.continuousActivity || this.agentActive)) {
+      metrics.activeStartedAt = now;
+    }
+    return metrics;
+  }
+
+  private resumeMetricsActivity(metrics: TaskMetrics, now = Date.now()) {
+    if (metrics.activeStartedAt === undefined) metrics.activeStartedAt = now;
+  }
+
+  private pauseMetricsActivity(metrics: TaskMetrics, now = Date.now()) {
+    if (metrics.activeStartedAt === undefined) return;
+    metrics.activeDurationMs += Math.max(0, now - metrics.activeStartedAt);
+    metrics.activeStartedAt = undefined;
+  }
+
+  private currentActiveDurationMs(metrics: TaskMetrics, now = Date.now()): number {
+    const currentInterval = metrics.activeStartedAt === undefined
+      ? 0
+      : Math.max(0, now - metrics.activeStartedAt);
+    return metrics.activeDurationMs + currentInterval;
+  }
+
+  private snapshotMetrics(metrics: TaskMetrics, now = Date.now()): TaskExecutionStats {
+    return {
+      startedAt: metrics.startedAt,
+      activeDurationMs: this.currentActiveDurationMs(metrics, now),
+      inputTokens: metrics.inputTokens,
+      outputTokens: metrics.outputTokens,
+      cacheReadTokens: metrics.cacheReadTokens,
+      cacheWriteTokens: metrics.cacheWriteTokens,
+      totalTokens: metrics.totalTokens,
+      costUsd: metrics.costUsd,
+    };
+  }
+
+  private persistRunningMetrics(taskId: string, task?: Task) {
+    const metrics = this.metrics.get(taskId);
+    if (!metrics || task?.status !== "in_progress") return;
+
+    const existingStats = isTaskExecutionStats(task.metadata?.executionStats)
+      ? task.metadata.executionStats
+      : undefined;
+    const executionStats: TaskExecutionStats = {
+      ...existingStats,
+      ...this.snapshotMetrics(metrics),
+    };
+    delete executionStats.completedAt;
+    delete executionStats.durationMs;
+    if (metrics.costUsd === 0 && existingStats?.costUsd === undefined) {
+      delete executionStats.costUsd;
+    }
+    this.store.update(taskId, { metadata: { executionStats } });
+  }
+
+  /** Mark foreground agent activity so idle waits do not dilute token throughput. */
+  setAgentActive(active: boolean) {
+    if (this.agentActive === active) return;
+    this.agentActive = active;
+    const now = Date.now();
+
+    for (const taskId of this.activeTaskIds) {
+      const metrics = this.metrics.get(taskId);
+      if (!metrics || metrics.continuousActivity) continue;
+      if (active) {
+        this.resumeMetricsActivity(metrics, now);
+      } else {
+        this.pauseMetricsActivity(metrics, now);
+        this.persistRunningMetrics(taskId, this.store.get(taskId));
+      }
+    }
+    this.update();
   }
 
   /** Persist the fact that a task started even before it completes. */
@@ -207,6 +316,7 @@ export class TaskWidget {
         startedAt,
         completedAt,
         durationMs: Math.max(0, completedAt - startedAt),
+        activeDurationMs: this.currentActiveDurationMs(metrics, completedAt),
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
         cacheReadTokens: metrics.cacheReadTokens,
@@ -265,15 +375,7 @@ export class TaskWidget {
           ? task.metadata.executionStats
           : undefined;
         const startedAt = existingStats?.startedAt ?? task.updatedAt;
-        this.metrics.set(task.id, {
-          startedAt,
-          inputTokens: existingStats?.inputTokens ?? 0,
-          outputTokens: existingStats?.outputTokens ?? 0,
-          cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
-          cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
-          totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
-          costUsd: existingStats?.costUsd ?? 0,
-        });
+        this.metrics.set(task.id, this.createMetrics(task, startedAt, existingStats));
         if (!existingStats) {
           this.persistStartMetrics(task.id, startedAt);
         }
@@ -288,6 +390,8 @@ export class TaskWidget {
         continue;
       }
       if (task.status !== "in_progress") {
+        const metrics = this.metrics.get(id);
+        if (metrics) this.pauseMetricsActivity(metrics, task.updatedAt);
         this.activeTaskIds.delete(id);
         this.persistMetrics(id, task);
       }
@@ -305,28 +409,36 @@ export class TaskWidget {
     if (taskId && active) {
       this.activeTaskIds.add(taskId);
       const task = this.store.get(taskId);
-      const existingStats = isTaskExecutionStats(task?.metadata?.executionStats)
+      if (!task) {
+        this.activeTaskIds.delete(taskId);
+        return;
+      }
+      const existingStats = isTaskExecutionStats(task.metadata?.executionStats)
         ? task.metadata.executionStats
         : undefined;
-      if (!this.metrics.has(taskId)) {
+      let metrics = this.metrics.get(taskId);
+      if (!metrics) {
         const startedAt = existingStats?.startedAt ?? Date.now();
-        this.metrics.set(taskId, {
-          startedAt,
-          inputTokens: existingStats?.inputTokens ?? 0,
-          outputTokens: existingStats?.outputTokens ?? 0,
-          cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
-          cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
-          totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
-          costUsd: existingStats?.costUsd ?? 0,
-        });
+        metrics = this.createMetrics(task, startedAt, existingStats);
+        this.metrics.set(taskId, metrics);
         if (!existingStats) {
           this.persistStartMetrics(taskId, startedAt);
+        }
+      } else {
+        metrics.continuousActivity = Boolean(task.metadata?.agentId);
+        if (metrics.continuousActivity || this.agentActive) {
+          this.resumeMetricsActivity(metrics);
         }
       }
       this.ensureTimer();
     } else if (taskId) {
-      this.activeTaskIds.delete(taskId);
       const task = this.store.get(taskId);
+      const metrics = this.metrics.get(taskId);
+      if (metrics) {
+        const stoppedAt = task?.status === "completed" ? task.updatedAt : Date.now();
+        this.pauseMetricsActivity(metrics, stoppedAt);
+      }
+      this.activeTaskIds.delete(taskId);
       this.persistMetrics(taskId, task);
     }
     this.update();
@@ -368,6 +480,13 @@ export class TaskWidget {
     if (!this.widgetInterval) {
       this.widgetInterval = setInterval(() => this.update(), 150);
     }
+  }
+
+  private formatLiveStats(theme: Theme, taskId: string): string {
+    const metrics = this.metrics.get(taskId);
+    if (!metrics) return "";
+    const now = Date.now();
+    return formatWidgetStats(theme, this.snapshotMetrics(metrics, now), now);
   }
 
   /** Build widget lines from current live state. Called from the render callback. */
@@ -437,7 +556,7 @@ export class TaskWidget {
         const form = task.activeForm || task.subject;
         const agentId = task.metadata?.agentId;
         const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
-        const stats = formatWidgetStats(theme, this.metrics.get(task.id));
+        const stats = this.formatLiveStats(theme, task.id);
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
       } else if (task.status === "completed") {
         const stats = isCompletedTaskExecutionStats(task.metadata.executionStats)
@@ -450,7 +569,7 @@ export class TaskWidget {
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
           : "";
         const stats = task.status === "in_progress"
-          ? formatWidgetStats(theme, this.metrics.get(task.id))
+          ? this.formatLiveStats(theme, task.id)
           : "";
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${stats}`;
       }

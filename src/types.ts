@@ -7,7 +7,10 @@ export type TaskStatus = "pending" | "in_progress" | "completed";
 export interface TaskExecutionStats {
   startedAt: number;
   completedAt?: number;
+  /** Wall-clock duration from task start to completion. */
   durationMs?: number;
+  /** Accumulated time spent inside active agent runs, excluding waits for user input. */
+  activeDurationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -31,6 +34,7 @@ export function isTaskExecutionStats(value: unknown): value is TaskExecutionStat
   for (const key of [
     "completedAt",
     "durationMs",
+    "activeDurationMs",
     "inputTokens",
     "outputTokens",
     "cacheReadTokens",

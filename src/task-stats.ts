@@ -2,7 +2,7 @@ import type { TaskExecutionStats } from "./types.js";
 
 export type OutputTokenRateStats = Pick<
   TaskExecutionStats,
-  "startedAt" | "completedAt" | "durationMs" | "outputTokens"
+  "startedAt" | "completedAt" | "durationMs" | "activeDurationMs" | "outputTokens"
 >;
 
 export type TotalTokenStats = Pick<
@@ -109,7 +109,8 @@ export function formatCompactCacheHitRatio(stats: CacheHitRatioStats): string | 
 }
 
 /**
- * Calculate average output-token throughput across a task's wall-clock execution window.
+ * Calculate average output-token throughput across accumulated active agent time.
+ * Legacy stats without an active duration fall back to their wall-clock execution window.
  * Returns undefined until both output usage and a positive duration are available.
  */
 export function calculateOutputTokenRate(
@@ -117,7 +118,9 @@ export function calculateOutputTokenRate(
   nowMs = Date.now(),
 ): number | undefined {
   const outputTokens = stats.outputTokens ?? 0;
-  const durationMs = stats.durationMs ?? (stats.completedAt ?? nowMs) - stats.startedAt;
+  const durationMs = stats.activeDurationMs
+    ?? stats.durationMs
+    ?? (stats.completedAt ?? nowMs) - stats.startedAt;
   if (
     !Number.isFinite(outputTokens) ||
     outputTokens <= 0 ||

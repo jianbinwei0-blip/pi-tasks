@@ -14,6 +14,7 @@ import {
   formatCompactCacheHitRatio,
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
+  formatCostUsd,
   formatTokenCount,
 } from "../task-stats.js";
 import type { TaskStore } from "../task-store.js";
@@ -102,15 +103,6 @@ function formatCompactDuration(ms: number): string {
   const totalMin = Math.floor(totalSec / 60);
   if (totalMin < 60) return `${totalMin}:${pad2(sec)}`;
   return `${Math.floor(totalMin / 60)}:${pad2(totalMin % 60)}:${pad2(sec)}`;
-}
-
-/** Format model cost in USD with useful precision for small per-task amounts. */
-function formatCostUsd(costUsd: number): string {
-  if (!Number.isFinite(costUsd) || costUsd === 0) return "$0";
-  const abs = Math.abs(costUsd);
-  if (abs < 0.01) return `$${costUsd.toFixed(4)}`;
-  if (abs < 1) return `$${costUsd.toFixed(3)}`;
-  return `$${costUsd.toFixed(2)}`;
 }
 
 /** Format local clock time in stable 24-hour notation with second precision. */

@@ -21,6 +21,12 @@ function formatTokenStatDecimal(value: number): string {
   return value.toFixed(TOKEN_STAT_DECIMAL_PLACES);
 }
 
+/** Format model cost in USD to cent precision. */
+export function formatCostUsd(costUsd: number): string {
+  const value = Number.isFinite(costUsd) ? costUsd : 0;
+  return `$${value.toFixed(2)}`;
+}
+
 /** Format an input, output, or total token count with at most one decimal place. */
 export function formatTokenCount(tokens: number): string {
   if (tokens < 1000) return String(tokens);

@@ -718,7 +718,7 @@ describe("TaskWidget", () => {
     let lines = renderWidget(ui.state);
     let taskLine = lines.find(l => l.includes("Running costed work…"));
     expect(taskLine).toContain("Σ4.5k ⨀75.0%");
-    expect(taskLine).toContain("$0.012");
+    expect(taskLine).toContain("$0.01");
 
     store.update("1", { status: "completed" });
     widget.setActiveTask("1", false);
@@ -732,7 +732,7 @@ describe("TaskWidget", () => {
     lines = renderWidget(ui.state);
     taskLine = lines.find(l => l.includes("Costed task"));
     expect(taskLine).toContain("Σ4.5k ⨀75.0%");
-    expect(taskLine).toContain("$0.012");
+    expect(taskLine).toContain("$0.01");
   });
 
   it("preserves persisted start time and tokens when a resumed task becomes active", () => {
@@ -757,7 +757,7 @@ describe("TaskWidget", () => {
     expect(activeLine).toContain("↓625");
     expect(activeLine).toContain("Σ1.9k");
     expect(activeLine).toContain("5.2 t/s");
-    expect(activeLine).toContain("$0.0063");
+    expect(activeLine).toContain("$0.01");
 
     store.update("1", { status: "completed" });
     widget.setActiveTask("1", false);

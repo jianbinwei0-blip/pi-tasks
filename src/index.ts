@@ -31,6 +31,7 @@ import {
 } from "./reminder-cadence.js";
 import {
   formatCacheHitRatio,
+  formatCostUsd,
   formatOutputTokenRate,
   formatTokenCount,
   formatTotalTokens,
@@ -63,14 +64,6 @@ function formatDuration(ms: number): string {
   const hr = Math.floor(min / 60);
   const remMin = min % 60;
   return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
-}
-
-function formatCostUsd(costUsd: number): string {
-  if (!Number.isFinite(costUsd) || costUsd === 0) return "$0";
-  const abs = Math.abs(costUsd);
-  if (abs < 0.01) return `$${costUsd.toFixed(4)}`;
-  if (abs < 1) return `$${costUsd.toFixed(3)}`;
-  return `$${costUsd.toFixed(2)}`;
 }
 
 function extractUsageCost(usage: any): number {

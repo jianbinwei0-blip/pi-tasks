@@ -529,7 +529,7 @@ describe("Standalone operation (no subagents extension)", () => {
 
     const result = await mock.executeTool("TaskList", {});
     expect(result.content[0].text).toContain(
-      "#1 [pending] Costed [$0.012] [4.4k tok] [60.0% cache hit] [6.2 tok/s]",
+      "#1 [pending] Costed [$0.01] [4.4k tok] [60.0% cache hit] [6.2 tok/s]",
     );
   });
 
@@ -617,7 +617,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("4.4k tok");
     expect(result.content[0].text).toContain("60.0% cache hit");
     expect(result.content[0].text).toContain("6.2 tok/s");
-    expect(result.content[0].text).toContain("$0.012");
+    expect(result.content[0].text).toContain("$0.01");
     expect(result.content[0].text).toContain('Metadata: {"note":"kept"}');
     expect(result.content[0].text).not.toContain('"executionStats"');
   });
@@ -646,7 +646,7 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("↓ 500");
     expect(result.content[0].text).toContain("4.5k tok");
     expect(result.content[0].text).toContain("75.0% cache hit");
-    expect(result.content[0].text).toContain("$0.012");
+    expect(result.content[0].text).toContain("$0.01");
   });
 
   it("excludes the wait between foreground agent runs from output-token rate", async () => {

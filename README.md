@@ -51,7 +51,7 @@ The extension renders a persistent widget above the editor:
 ```
 ● 4 tasks (1 done, 1 in progress, 2 open)
   ✔ #1 Design the flux capacitor (13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 31.4 t/s · $1.88)
-  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k ⨀94.8% · 7.1 t/s · $0.030)
+  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k ⨀94.8% · 7.1 t/s · $0.03)
   ◻ #3 Install flux capacitor in DeLorean › blocked by #1
   ◻ #4 Test time travel at 88 mph › blocked by #2, #3
 ```
@@ -63,7 +63,7 @@ The extension renders a persistent widget above the editor:
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and model cost when available) |
 
-Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. The token group keeps `↑` input, `↓` output, `Σ` total, and `⨀` task-wide cache hit ratio together; `t/s` is average output-token throughput during active agent time. Every decimal token statistic uses one digit after the decimal point, while whole compact counts omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`).
+Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. The token group keeps `↑` input, `↓` output, `Σ` total, and `⨀` task-wide cache hit ratio together; `t/s` is average output-token throughput during active agent time. Every decimal token statistic uses one digit after the decimal point, while whole compact counts omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`). Model costs are rounded to cents and always use two decimal places.
 
 Total tokens use Pi's provider-reported `usage.totalTokens`, which includes input, output, cache-read, and cache-write tokens. Component-aware records without that field sum all four categories; legacy records fall back to input + output. Million-scale widget totals are rounded to one decimal place, while the tool views retain their labeled `tok`/`tok/s` format. Cache hit ratio follows Pi's formula: cache-read tokens divided by all prompt tokens (input + cache-read + cache-write), and appears once the provider reports cache activity. Token rate is calculated as output tokens divided by accumulated active agent-run time. Foreground timing pauses at `agent_end` and resumes at the next `agent_start`, so time spent waiting for the user's next prompt does not dilute throughput; autonomous background subagents remain active from launch through completion. It is a task-wide average, not raw provider inference throughput, and appears once both output usage and a positive active duration are available.
 
@@ -114,7 +114,7 @@ List all tasks with status, owner, and blocked-by info.
 
 ```
 #1 [pending] Fix authentication bug
-#2 [in_progress] Write unit tests (agent-1) [$0.012] [81.6k tok] [94.8% cache hit] [6.2 tok/s]
+#2 [in_progress] Write unit tests (agent-1) [$0.01] [81.6k tok] [94.8% cache hit] [6.2 tok/s]
 #3 [pending] Update docs [blocked by #1, #2]
 ```
 

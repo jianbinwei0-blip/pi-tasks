@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Cent-precision task costs** — model costs now round to exactly two decimal places in the widget, `TaskList`, `TaskGet`, and `/tasks` picker (for example, `$0.661` displays as `$0.66`).
 - **Active-time token rates** — foreground task throughput now divides output tokens by accumulated `agent_start` → `agent_end` time, excluding idle waits for the user's next prompt; autonomous background subagents continue to use their uninterrupted launch-to-completion time.
 - **Consistent token-stat precision** — every decimal token statistic now uses one digit after the decimal point, including input, output, total, cache-hit, and throughput values; whole compact counts still omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`).
 - **Compact token-rate spacing** — widget throughput now includes a space before the `t/s` unit (for example, `0.2 t/s`).

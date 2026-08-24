@@ -7,10 +7,20 @@ import {
   formatCompactCacheHitRatio,
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
+  formatCostUsd,
   formatOutputTokenRate,
   formatTokenCount,
   formatTotalTokens,
 } from "../src/task-stats.js";
+
+describe("cost formatting", () => {
+  it("rounds USD costs to cents with exactly two decimal places", () => {
+    expect(formatCostUsd(0.661)).toBe("$0.66");
+    expect(formatCostUsd(0.0063)).toBe("$0.01");
+    expect(formatCostUsd(0)).toBe("$0.00");
+    expect(formatCostUsd(Number.NaN)).toBe("$0.00");
+  });
+});
 
 describe("token count formatting", () => {
   it("uses at most one decimal place for every compact token count", () => {

@@ -195,8 +195,28 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain(
-      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M ⨀99.3% · 31.4 t/s · $1.88)",
+      "(13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 31.4 t/s · $1.88)",
     );
+  });
+
+  it("uses one decimal place across compact token counts", () => {
+    const startedAt = new Date(2026, 3, 13, 13, 48, 35).getTime();
+    const completedAt = new Date(2026, 3, 13, 13, 50, 27).getTime();
+    store.create("Precise stats", "Desc", undefined, {
+      executionStats: {
+        startedAt,
+        completedAt,
+        durationMs: 112_000,
+        inputTokens: 392_240,
+        outputTokens: 120_000,
+        totalTokens: 143_984_000,
+      },
+    });
+    store.update("1", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("↑392.2k ↓120k Σ144.0M");
   });
 
   it("renders live stats in the corresponding compact format", () => {
@@ -218,7 +238,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines[1]).toContain(
-      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.347M ⨀99.3% · 31.4 t/s · $1.88)",
+      "(13:48:35 Δ1:52 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 31.4 t/s · $1.88)",
     );
   });
 

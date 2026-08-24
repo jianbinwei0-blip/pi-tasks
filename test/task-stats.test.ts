@@ -8,8 +8,17 @@ import {
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
   formatOutputTokenRate,
+  formatTokenCount,
   formatTotalTokens,
 } from "../src/task-stats.js";
+
+describe("token count formatting", () => {
+  it("uses at most one decimal place for every compact token count", () => {
+    expect(formatTokenCount(392_240)).toBe("392.2k");
+    expect(formatTokenCount(120_000)).toBe("120k");
+    expect(formatTokenCount(850)).toBe("850");
+  });
+});
 
 describe("total token count", () => {
   it("uses Pi's provider-reported total, including cache traffic", () => {
@@ -38,8 +47,9 @@ describe("total token count", () => {
     expect(formatTotalTokens(stats)).toBe("1.6k tok");
   });
 
-  it("formats compact widget totals with sigma and truncated million precision", () => {
-    expect(formatCompactTotalTokens({ totalTokens: 3_347_800 })).toBe("Σ3.347M");
+  it("formats compact widget totals with sigma and one decimal of million precision", () => {
+    expect(formatCompactTotalTokens({ totalTokens: 143_984_000 })).toBe("Σ144.0M");
+    expect(formatCompactTotalTokens({ totalTokens: 3_347_800 })).toBe("Σ3.3M");
     expect(formatCompactTotalTokens({ totalTokens: 87_600 })).toBe("Σ87.6k");
     expect(formatCompactTotalTokens({ inputTokens: 500, outputTokens: 200 })).toBe("Σ700");
   });

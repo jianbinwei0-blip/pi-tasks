@@ -15,17 +15,22 @@ export type CacheHitRatioStats = Pick<
   "inputTokens" | "cacheReadTokens" | "cacheWriteTokens"
 >;
 
-function compactTokenCount(tokens: number): string {
+const TOKEN_STAT_DECIMAL_PLACES = 1;
+
+function formatTokenStatDecimal(value: number): string {
+  return value.toFixed(TOKEN_STAT_DECIMAL_PLACES);
+}
+
+/** Format an input, output, or total token count with at most one decimal place. */
+export function formatTokenCount(tokens: number): string {
   if (tokens < 1000) return String(tokens);
-  return `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${formatTokenStatDecimal(tokens / 1000).replace(/\.0$/, "")}k`;
 }
 
 function compactWidgetTotalTokenCount(tokens: number): string {
-  if (tokens < 1_000_000) return compactTokenCount(tokens);
+  if (tokens < 1_000_000) return formatTokenCount(tokens);
 
-  // Keep three decimal places without rounding up the provider-reported total.
-  const millions = Math.trunc(tokens / 1000) / 1000;
-  return `${millions.toFixed(3).replace(/\.?(?:0+)$/, "")}M`;
+  return `${formatTokenStatDecimal(tokens / 1_000_000)}M`;
 }
 
 /**
@@ -55,7 +60,7 @@ export function calculateTotalTokens(stats: TotalTokenStats): number | undefined
 /** Format a task's total usage as a compact token count. */
 export function formatTotalTokens(stats: TotalTokenStats): string | undefined {
   const totalTokens = calculateTotalTokens(stats);
-  return totalTokens === undefined ? undefined : `${compactTokenCount(totalTokens)} tok`;
+  return totalTokens === undefined ? undefined : `${formatTokenCount(totalTokens)} tok`;
 }
 
 /** Format total usage for the compact widget, using sigma and M for millions. */
@@ -94,13 +99,13 @@ export function calculateCacheHitRatio(stats: CacheHitRatioStats): number | unde
 /** Format the cache hit ratio as a labeled percentage. */
 export function formatCacheHitRatio(stats: CacheHitRatioStats): string | undefined {
   const ratio = calculateCacheHitRatio(stats);
-  return ratio === undefined ? undefined : `${(ratio * 100).toFixed(1)}% cache hit`;
+  return ratio === undefined ? undefined : `${formatTokenStatDecimal(ratio * 100)}% cache hit`;
 }
 
 /** Format the cache hit ratio for the compact widget. */
 export function formatCompactCacheHitRatio(stats: CacheHitRatioStats): string | undefined {
   const ratio = calculateCacheHitRatio(stats);
-  return ratio === undefined ? undefined : `⨀${(ratio * 100).toFixed(1)}%`;
+  return ratio === undefined ? undefined : `⨀${formatTokenStatDecimal(ratio * 100)}%`;
 }
 
 /**
@@ -132,7 +137,7 @@ export function formatOutputTokenRate(
   nowMs = Date.now(),
 ): string | undefined {
   const rate = calculateOutputTokenRate(stats, nowMs);
-  return rate === undefined ? undefined : `${rate.toFixed(1)} tok/s`;
+  return rate === undefined ? undefined : `${formatTokenStatDecimal(rate)} tok/s`;
 }
 
 /** Format output-token throughput for the compact widget. */
@@ -141,5 +146,5 @@ export function formatCompactOutputTokenRate(
   nowMs = Date.now(),
 ): string | undefined {
   const rate = calculateOutputTokenRate(stats, nowMs);
-  return rate === undefined ? undefined : `${rate.toFixed(1)} t/s`;
+  return rate === undefined ? undefined : `${formatTokenStatDecimal(rate)} t/s`;
 }

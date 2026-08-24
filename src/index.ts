@@ -29,7 +29,12 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { formatCacheHitRatio, formatOutputTokenRate, formatTotalTokens } from "./task-stats.js";
+import {
+  formatCacheHitRatio,
+  formatOutputTokenRate,
+  formatTokenCount,
+  formatTotalTokens,
+} from "./task-stats.js";
 import { compareTaskIds, TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { isCompletedTaskExecutionStats, isTaskExecutionStats, type TaskExecutionStats } from "./types.js";
@@ -58,11 +63,6 @@ function formatDuration(ms: number): string {
   const hr = Math.floor(min / 60);
   const remMin = min % 60;
   return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
-}
-
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
 }
 
 function formatCostUsd(costUsd: number): string {
@@ -94,8 +94,8 @@ function extractUsageTotalTokens(usage: any): number {
 
 function formatExecutionUsageParts(stats: TaskExecutionStats): string[] {
   const parts: string[] = [];
-  if ((stats.inputTokens ?? 0) > 0) parts.push(`↑ ${formatTokens(stats.inputTokens ?? 0)}`);
-  if ((stats.outputTokens ?? 0) > 0) parts.push(`↓ ${formatTokens(stats.outputTokens ?? 0)}`);
+  if ((stats.inputTokens ?? 0) > 0) parts.push(`↑ ${formatTokenCount(stats.inputTokens ?? 0)}`);
+  if ((stats.outputTokens ?? 0) > 0) parts.push(`↓ ${formatTokenCount(stats.outputTokens ?? 0)}`);
   const totalTokens = formatTotalTokens(stats);
   if (totalTokens) parts.push(totalTokens);
   const cacheHitRatio = formatCacheHitRatio(stats);

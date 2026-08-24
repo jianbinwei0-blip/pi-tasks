@@ -14,6 +14,7 @@ import {
   formatCompactCacheHitRatio,
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
+  formatTokenCount,
 } from "../task-stats.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
@@ -100,12 +101,6 @@ function formatCompactDuration(ms: number): string {
   return `${Math.floor(totalMin / 60)}:${pad2(totalMin % 60)}:${pad2(sec)}`;
 }
 
-/** Format token count with k suffix (e.g., "4.1k", "850"). */
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
-}
-
 /** Format model cost in USD with useful precision for small per-task amounts. */
 function formatCostUsd(costUsd: number): string {
   if (!Number.isFinite(costUsd) || costUsd === 0) return "$0";
@@ -134,8 +129,8 @@ function formatWidgetStats(
     : `${formatClockTime(stats.startedAt)} → ${formatClockTime(stats.completedAt)} Δ${formatCompactDuration(durationMs)}`;
 
   const tokenParts: string[] = [];
-  if ((stats.inputTokens ?? 0) > 0) tokenParts.push(`↑${formatTokens(stats.inputTokens ?? 0)}`);
-  if ((stats.outputTokens ?? 0) > 0) tokenParts.push(`↓${formatTokens(stats.outputTokens ?? 0)}`);
+  if ((stats.inputTokens ?? 0) > 0) tokenParts.push(`↑${formatTokenCount(stats.inputTokens ?? 0)}`);
+  if ((stats.outputTokens ?? 0) > 0) tokenParts.push(`↓${formatTokenCount(stats.outputTokens ?? 0)}`);
   const totalTokens = formatCompactTotalTokens(stats);
   if (totalTokens) tokenParts.push(totalTokens);
   const cacheHitRatio = formatCompactCacheHitRatio(stats);

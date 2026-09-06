@@ -295,6 +295,35 @@ describe("auto-clear: oldest mode", () => {
   });
 });
 
+describe("auto-clear: subtask history", () => {
+  it.each<AutoClearMode>(["oldest", "on_task_complete"])(
+    "keeps nested completed subtasks until their unfinished ancestor completes in %s mode",
+    mode => {
+      const store = new TaskStore();
+      const manager = new AutoClearManager(() => store, () => mode, 4, () => 1);
+      const parent = store.create("Parent", "Desc");
+      const child = store.createSubtask(parent.id, "Child", "Desc");
+      const grandchild = store.createSubtask(child.id, "Grandchild", "Desc");
+      const unrelated = store.create("Unrelated", "Desc");
+      for (const task of [child, grandchild, unrelated]) {
+        store.update(task.id, { status: "completed" });
+        manager.trackCompletion(task.id, 1);
+      }
+      manager.onTurnStart(5);
+      expect(store.list().map(task => task.id)).toEqual([parent.id, child.id, grandchild.id]);
+
+      store.update(parent.id, { status: "in_progress" });
+      expect(manager.onTurnStart(6)).toBe(false);
+      expect(store.list()).toHaveLength(3);
+
+      store.update(parent.id, { status: "completed" });
+      manager.trackCompletion(parent.id, 6);
+      manager.onTurnStart(10);
+      expect(store.list()).toHaveLength(mode === "oldest" ? 1 : 0);
+    },
+  );
+});
+
 describe("auto-clear: never mode", () => {
   let store: TaskStore;
   let manager: AutoClearManager;

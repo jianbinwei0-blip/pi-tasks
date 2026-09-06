@@ -142,6 +142,62 @@ function formatWidgetStats(
   return ` ${theme.fg("dim", `(${statGroups.join(" · ")})`)}`;
 }
 
+// ---- Summary ----
+
+function hasOpenBlocker(task: Task, tasksById: Map<string, Task>): boolean {
+  return task.status === "pending" && task.blockedBy.some(blockerId => {
+    const blocker = tasksById.get(blockerId);
+    return blocker !== undefined && blocker.status !== "completed";
+  });
+}
+
+function formatStatusParts(
+  tasks: Task[],
+  tasksById: Map<string, Task>,
+  inProgressLabel: "active" | "running",
+): string[] {
+  let done = 0;
+  let inProgress = 0;
+  let ready = 0;
+  let blocked = 0;
+
+  for (const task of tasks) {
+    if (task.status === "completed") {
+      done++;
+    } else if (task.status === "in_progress") {
+      inProgress++;
+    } else if (hasOpenBlocker(task, tasksById)) {
+      blocked++;
+    } else {
+      ready++;
+    }
+  }
+
+  const parts: string[] = [];
+  if (done > 0) parts.push(`${done} done`);
+  if (inProgress > 0) parts.push(`${inProgress} ${inProgressLabel}`);
+  if (ready > 0) parts.push(`${ready} ready`);
+  if (blocked > 0) parts.push(`${blocked} blocked`);
+  return parts;
+}
+
+function formatTaskSummary(tasks: Task[]): string {
+  const tasksById = new Map(tasks.map(task => [task.id, task]));
+  const topLevelTasks = tasks.filter(task => !task.parentTaskId);
+  const subtasks = tasks.filter(task => task.parentTaskId);
+  const topLevelParts = formatStatusParts(topLevelTasks, tasksById, "active");
+
+  const topLevelSummary = topLevelParts.length === 1
+    ? `${topLevelParts[0]} ${topLevelTasks.length === 1 ? "task" : "tasks"}`
+    : `${topLevelTasks.length} tasks (${topLevelParts.join(", ")})`;
+
+  if (subtasks.length === 0) return topLevelSummary;
+
+  const subtaskParts = formatStatusParts(subtasks, tasksById, "running");
+  const subtaskSummary = `${subtasks.length} ${subtasks.length === 1 ? "subtask" : "subtasks"} (${subtaskParts.join(", ")})`;
+  return `${topLevelSummary} · ${subtaskSummary}`;
+}
+
 // ---- Widget ----
 
 export class TaskWidget {
@@ -490,15 +546,7 @@ export class TaskWidget {
 
     if (tasks.length === 0) return [];
 
-    const completed = tasks.filter(t => t.status === "completed");
-    const inProgress = tasks.filter(t => t.status === "in_progress");
-    const pending = tasks.filter(t => t.status === "pending");
-
-    const parts: string[] = [];
-    if (completed.length > 0) parts.push(`${completed.length} done`);
-    if (inProgress.length > 0) parts.push(`${inProgress.length} in progress`);
-    if (pending.length > 0) parts.push(`${pending.length} open`);
-    const statusText = `${tasks.length} tasks (${parts.join(", ")})`;
+    const statusText = formatTaskSummary(tasks);
 
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];

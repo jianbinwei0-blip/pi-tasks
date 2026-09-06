@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and per-task model cost
+- **Persistent widget** — live task list above the editor with hierarchy-aware status summaries, `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and per-task model cost
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt task creation modes** — choose model-discretionary task creation, manual-only task tracking, or required model-owned task creation for every user prompt
 - **Prompt-scoped subtasks** — in `always` mode, extra tasks created for a complex prompt are nested under its prompt task as `#13.1`, `#13.2`, and so on instead of consuming `#14`, `#15`, …
@@ -49,11 +49,12 @@ pi -e ./src/index.ts
 The extension renders a persistent widget above the editor:
 
 ```
-● 4 tasks (1 done, 1 in progress, 2 open)
-  ✔ #1 Design the flux capacitor (13:48:35 → 13:50:27 Δ1:52 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 31.4 t/s · $1.88)
-  ✳ #2 Acquiring plutonium… (13:48:35 Δ2:49 · ↑4.1k ↓1.2k Σ87.6k ⨀94.8% · 7.1 t/s · $0.03)
-  ◻ #3 Install flux capacitor in DeLorean › blocked by #1
-  ◻ #4 Test time travel at 88 mph › blocked by #2, #3
+● 1 active task · 4 subtasks (1 running, 3 blocked)
+  ✳ #1 Building the time machine… (13:48:35 Δ2:49 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 20.9 t/s · $1.88)
+    ✳ #1.1 Acquiring plutonium… (13:50:27 Δ1:03 · ↑4.1k ↓1.2k Σ87.6k ⨀94.8% · 19.0 t/s · $0.03)
+    ◻ #1.2 Design the flux capacitor › blocked by #1.1
+    ◻ #1.3 Install flux capacitor in DeLorean › blocked by #1.1
+    ◻ #1.4 Test time travel at 88 mph › blocked by #1.2, #1.3
 ```
 
 | Icon | Meaning |
@@ -62,6 +63,8 @@ The extension renders a persistent widget above the editor:
 | `◼` | In-progress (not actively executing) |
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and model cost when available) |
+
+The header summarizes all stored tasks, including hidden rows, with top-level tasks separate from subtasks so an active parent roll-up is not double-counted as additional subtask execution. Top-level `in_progress` tasks are **active**, subtask `in_progress` tasks are **running**, and pending work is split into **ready** and **blocked** using its unresolved dependencies.
 
 Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. The token group keeps `↑` input, `↓` output, `Σ` total, and `⨀` task-wide cache hit ratio together; `t/s` is average output-token throughput during active agent time. Every decimal token statistic uses one digit after the decimal point, while whole compact counts omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`). Model costs are rounded to cents and always use two decimal places.
 
@@ -250,6 +253,8 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 | `oldest` | When total tasks exceed `maxVisible`, clears only enough of the oldest completed tasks to meet the limit; unfinished tasks are never cleared |
 
 The `on_list_complete` and `on_task_complete` modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear. The `oldest` mode applies its size limit immediately.
+
+Automatic cleanup retains completed subtasks while any ancestor is unfinished, so the header keeps the full subtask total and status breakdown even when rows are hidden. This can leave more than `maxVisible` tasks stored; display limits still apply independently. Once the ancestors finish, normal cleanup resumes. Manual deletion and **Clear completed** still remove tasks explicitly. Tasks already auto-cleared by older versions are not restored.
 
 Settings (`taskScope`, `taskCreationMode`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) can be set globally in `~/.pi/agent/extensions/pi-tasks.json` and overridden per project via `/tasks` → Settings (saved to `<cwd>/.pi/tasks-config.json`). `taskCreationMode` can also be configured through pi-extmgr's package configuration panel.
 

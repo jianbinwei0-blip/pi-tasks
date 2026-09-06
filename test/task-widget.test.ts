@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AutoClearManager, type AutoClearMode } from "../src/auto-clear.js";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 
@@ -74,8 +75,7 @@ describe("TaskWidget", () => {
 
     const lines = renderWidget(ui.state);
     expect(lines).toHaveLength(2); // header + 1 task
-    expect(lines[0]).toContain("1 tasks");
-    expect(lines[0]).toContain("1 open");
+    expect(lines[0]).toBe("● 1 ready task");
     expect(lines[1]).toContain("◻");
     expect(lines[1]).toContain("Do something");
   });
@@ -474,20 +474,67 @@ describe("TaskWidget", () => {
     expect(blockedLine).not.toContain("blocked by");
   });
 
-  it("shows status summary in header", () => {
-    store.create("Task A", "Desc");
-    store.create("Task B", "Desc");
-    store.create("Task C", "Desc");
+  it("distinguishes ready and blocked tasks in the status summary", () => {
+    store.create("Done task", "Desc");
+    store.create("Active task", "Desc");
+    store.create("Ready task", "Desc");
+    store.create("Blocked task", "Desc");
     store.update("1", { status: "completed" });
     store.update("2", { status: "in_progress" });
+    store.update("4", { addBlockedBy: ["2"] });
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines[0]).toContain("3 tasks");
-    expect(lines[0]).toContain("1 done");
-    expect(lines[0]).toContain("1 in progress");
-    expect(lines[0]).toContain("1 open");
+    expect(lines[0]).toBe("● 4 tasks (1 done, 1 active, 1 ready, 1 blocked)");
   });
+
+  it("separates parent roll-ups from subtask execution in the status summary", () => {
+    const parent = store.create("Recover rollout", "Desc");
+    store.update(parent.id, { status: "in_progress" });
+    const running = store.createSubtask(parent.id, "Record root cause", "Desc");
+    const worker = store.createSubtask(parent.id, "Fix probes", "Desc");
+    const config = store.createSubtask(parent.id, "Fix ConfigMap", "Desc");
+    const validation = store.createSubtask(parent.id, "Validate recovery", "Desc");
+    store.update(running.id, { status: "in_progress" });
+    store.update(worker.id, { addBlockedBy: [running.id] });
+    store.update(config.id, { addBlockedBy: [running.id] });
+    store.update(validation.id, { addBlockedBy: [worker.id, config.id] });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[0]).toBe("● 1 active task · 4 subtasks (1 running, 3 blocked)");
+  });
+
+  it.each<AutoClearMode>(["oldest", "on_task_complete"])(
+    "counts all six subtasks when only four are displayed with %s cleanup",
+    mode => {
+      widget = new TaskWidget(store, { sortOrder: "status", hiddenAt: "top", maxVisible: 5 });
+      widget.setUICtx(ui.ctx);
+      const manager = new AutoClearManager(() => store, () => mode, 4, () => 5);
+      const parent = store.create("Audit cleanup", "Desc");
+      store.update(parent.id, { status: "in_progress" });
+      const subtasks = Array.from({ length: 6 }, (_, i) =>
+        store.createSubtask(parent.id, `Step ${i + 1}`, "Desc")
+      );
+      for (const task of subtasks.slice(0, 3)) {
+        store.update(task.id, { status: "completed" });
+        manager.trackCompletion(task.id, 1);
+      }
+      store.update(subtasks[3].id, { status: "in_progress" });
+      store.update(subtasks[4].id, { addBlockedBy: [subtasks[3].id] });
+      store.update(subtasks[5].id, { addBlockedBy: [subtasks[4].id] });
+      manager.onTaskListChanged();
+      manager.onTurnStart(5);
+      widget.update();
+
+      const lines = renderWidget(ui.state);
+      expect(lines[0]).toBe("● 1 active task · 6 subtasks (3 done, 1 running, 2 blocked)");
+      expect(lines[1]).toContain("2 more");
+      expect(lines.filter(line => line.includes("Step"))).toHaveLength(4);
+      expect(lines.some(line => line.includes("Step 1"))).toBe(false);
+      expect(lines.some(line => line.includes("Step 2"))).toBe(false);
+    },
+  );
 
   it("clears widget when all tasks are deleted", () => {
     store.create("Task", "Desc");

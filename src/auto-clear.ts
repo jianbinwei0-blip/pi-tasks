@@ -11,6 +11,7 @@
  */
 
 import type { TaskStore } from "./task-store.js";
+import type { Task } from "./types.js";
 
 export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete" | "oldest";
 
@@ -48,7 +49,22 @@ export class AutoClearManager {
     return this.getMode() === "oldest" && this.clearOldestCompletedOverflow();
   }
 
-  /** Clear only enough oldest completed tasks to bring the list down to maxVisible. */
+  /** Keep completed subtasks in the totals until their ancestors finish. */
+  private hasUnfinishedAncestor(task: Task): boolean {
+    const store = this.getStore();
+    const visited = new Set<string>([task.id]);
+    let parentId = task.parentTaskId;
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = store.get(parentId);
+      if (!parent) return false;
+      if (parent.status !== "completed") return true;
+      parentId = parent.parentTaskId;
+    }
+    return false;
+  }
+
+  /** Clear eligible oldest completed tasks toward the maxVisible target. */
   private clearOldestCompletedOverflow(): boolean {
     const store = this.getStore();
     const tasks = store.list("oldest");
@@ -60,7 +76,7 @@ export class AutoClearManager {
     if (overflowCount <= 0) return false;
 
     const tasksToClear = tasks
-      .filter(task => task.status === "completed")
+      .filter(task => task.status === "completed" && !this.hasUnfinishedAncestor(task))
       .slice(0, overflowCount);
 
     for (const task of tasksToClear) {
@@ -110,7 +126,7 @@ export class AutoClearManager {
         if (!task || task.status !== "completed") {
           // Task was deleted or reverted — drop stale tracking entry
           this.completedAtTurn.delete(taskId);
-        } else if (currentTurn - turn >= this.clearDelayTurns) {
+        } else if (currentTurn - turn >= this.clearDelayTurns && !this.hasUnfinishedAncestor(task)) {
           this.getStore().delete(taskId);
           this.completedAtTurn.delete(taskId);
           cleared = true;

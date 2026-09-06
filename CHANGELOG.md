@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Stable subtask totals during active work** — automatic `oldest` and `on_task_complete` cleanup now retain completed subtasks while any ancestor is unfinished. Hidden completed rows remain in the header's total and status breakdown (for example, `6 subtasks (3 done, 1 running, 2 blocked)` with only four subtask rows displayed).
+- **Hierarchy-aware widget summaries** — parent roll-up statuses are now summarized separately from subtask execution (for example, `1 active task · 4 subtasks (1 running, 3 blocked)`), and pending work is split into `ready` and `blocked` instead of being grouped ambiguously as `open`.
 - **Cent-precision task costs** — model costs now round to exactly two decimal places in the widget, `TaskList`, `TaskGet`, and `/tasks` picker (for example, `$0.661` displays as `$0.66`).
 - **Active-time token rates** — foreground task throughput now divides output tokens by accumulated `agent_start` → `agent_end` time, excluding idle waits for the user's next prompt; autonomous background subagents continue to use their uninterrupted launch-to-completion time.
 - **Consistent token-stat precision** — every decimal token statistic now uses one digit after the decimal point, including input, output, total, cache-hit, and throughput values; whole compact counts still omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`).

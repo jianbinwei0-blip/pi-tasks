@@ -96,6 +96,7 @@ function formatExecutionUsageParts(stats: TaskExecutionStats): string[] {
   const tokenRate = formatOutputTokenRate(stats);
   if (tokenRate) parts.push(tokenRate);
   if (stats.costUsd !== undefined) parts.push(formatCostUsd(stats.costUsd));
+  if (stats.legacyUsageOverlap) parts.push("legacy overlap possible");
   return parts;
 }
 
@@ -662,7 +663,7 @@ Returns a summary of each task:
 - **status**: 'pending', 'in_progress', or 'completed'
 - **owner**: Agent ID if assigned, empty if available
 - **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
-- **execution stats**: Cost, total token count, cache hit ratio, and active-time output-token rate when available
+- **execution stats**: Cost, total token count, cache hit ratio, and active-time output-token rate when available; parent rows include all descendants
 
 Use TaskGet with a specific task ID to view full details including description and comments.`,
     parameters: Type.Object({}),
@@ -670,6 +671,7 @@ Use TaskGet with a specific task ID to view full details including description a
     execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
       const tasks = store.list();
       if (tasks.length === 0) return Promise.resolve(textResult("No tasks found"));
+      const executionStats = widget.getExecutionStats(tasks);
 
       // Sort: pending first (by ID), then in_progress (by ID), then completed (by ID)
       const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
@@ -687,9 +689,7 @@ Use TaskGet with a specific task ID to view full details including description a
           line += ` (${task.owner})`;
         }
 
-        const stats = isTaskExecutionStats(task.metadata.executionStats)
-          ? task.metadata.executionStats
-          : undefined;
+        const stats = executionStats.get(task.id);
         if (stats?.costUsd !== undefined) {
           line += ` [${formatCostUsd(stats.costUsd)}]`;
         }
@@ -705,6 +705,8 @@ Use TaskGet with a specific task ID to view full details including description a
         if (tokenRate) {
           line += ` [${tokenRate}]`;
         }
+
+        if (stats?.legacyUsageOverlap) line += " [legacy overlap possible]";
 
         // Only show non-completed blockers
         if (task.blockedBy.length > 0) {
@@ -748,7 +750,7 @@ Returns full task details:
 - **parent**: Parent task ID when this is a subtask
 - **blocks**: Tasks waiting on this one to complete
 - **blockedBy**: Tasks that must complete before this one can start
-- **execution stats**: Timing, input/output/total tokens, cache hit ratio, active-time output-token rate, and cost when available
+- **execution stats**: Timing, input/output/total tokens, cache hit ratio, active-time output-token rate, and cost when available; parent usage includes all descendants
 
 ## Tips
 
@@ -790,12 +792,8 @@ Returns full task details:
         lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
       }
 
-      const executionStats = isTaskExecutionStats(task.metadata.executionStats)
-        ? task.metadata.executionStats
-        : undefined;
-      const completedStats = isCompletedTaskExecutionStats(task.metadata.executionStats)
-        ? task.metadata.executionStats
-        : undefined;
+      const executionStats = widget.getExecutionStats().get(task.id);
+      const completedStats = isCompletedTaskExecutionStats(executionStats) ? executionStats : undefined;
       if (completedStats) {
         const statParts = [
           `started ${formatClockTime(completedStats.startedAt)}`,
@@ -813,7 +811,7 @@ Returns full task details:
       }
 
       // Show metadata if non-empty. When execution stats are valid, render them separately.
-      const metadataForDisplay = executionStats
+      const metadataForDisplay = isTaskExecutionStats(task.metadata.executionStats)
         ? Object.fromEntries(Object.entries(task.metadata).filter(([key]) => key !== "executionStats"))
         : task.metadata;
       const metaKeys = Object.keys(metadataForDisplay);
@@ -936,11 +934,16 @@ Set up task dependencies:
         return Promise.resolve(textResult(`Task #${taskId} not found`));
       }
 
+      if (fields.metadata && Object.hasOwn(fields.metadata, "executionStats")) {
+        widget.refreshExecutionStats(taskId);
+      }
+
       // Update widget active task tracking
       if (fields.status === "in_progress") {
         widget.setActiveTask(taskId);
         autoClear.resetBatchCountdown();
       } else if (fields.status === "pending") {
+        widget.setActiveTask(taskId, false);
         autoClear.resetBatchCountdown();
       } else if (fields.status === "completed" || fields.status === "deleted") {
         widget.setActiveTask(taskId, false);
@@ -1254,10 +1257,9 @@ Set up task dependencies:
           }
         };
 
+        const executionStats = widget.getExecutionStats(tasks);
         const choices = tasks.map((t) => {
-          const stats = isTaskExecutionStats(t.metadata.executionStats)
-            ? t.metadata.executionStats
-            : undefined;
+          const stats = executionStats.get(t.id);
           const costSuffix = stats?.costUsd !== undefined ? ` · ${formatCostUsd(stats.costUsd)}` : "";
           const totalTokens = stats ? formatTotalTokens(stats) : undefined;
           const totalSuffix = totalTokens ? ` · ${totalTokens}` : "";
@@ -1265,8 +1267,9 @@ Set up task dependencies:
           const cacheSuffix = cacheHitRatio ? ` · ${cacheHitRatio}` : "";
           const tokenRate = stats ? formatOutputTokenRate(stats) : undefined;
           const rateSuffix = tokenRate ? ` · ${tokenRate}` : "";
+          const legacySuffix = stats?.legacyUsageOverlap ? " · legacy overlap possible" : "";
           const indent = t.parentTaskId ? "  " : "";
-          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}${totalSuffix}${cacheSuffix}${rateSuffix}`;
+          return `${indent}${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}${costSuffix}${totalSuffix}${cacheSuffix}${rateSuffix}${legacySuffix}`;
         });
         choices.push("← Back");
 

@@ -10,12 +10,15 @@
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
+  aggregateTaskExecutionStats,
   calculateTotalTokens,
+  foregroundTaskIds,
   formatCompactCacheHitRatio,
   formatCompactOutputTokenRate,
   formatCompactTotalTokens,
   formatCostUsd,
   formatTokenCount,
+  hasLegacyTaskUsage,
 } from "../task-stats.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
@@ -80,9 +83,12 @@ const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
 /** Per-task runtime metrics (elapsed time, token usage/rate, and model cost). */
 export interface TaskMetrics {
+  usageAttribution?: "exclusive";
   startedAt: number;
   activeDurationMs: number;
   activeStartedAt?: number;
+  /** Share of foreground agent time allocated to this task (background agents use 1). */
+  activityShare: number;
   continuousActivity: boolean;
   inputTokens: number;
   outputTokens: number;
@@ -139,6 +145,7 @@ function formatWidgetStats(
     statGroups.push(formatCostUsd(stats.costUsd));
   }
 
+  if (stats.legacyUsageOverlap) statGroups.push("legacy overlap possible");
   return ` ${theme.fg("dim", `(${statGroups.join(" · ")})`)}`;
 }
 
@@ -221,6 +228,12 @@ export class TaskWidget {
   ) {}
 
   setStore(store: TaskStore) {
+    const now = Date.now();
+    for (const [id, metrics] of this.metrics) {
+      this.pauseMetricsActivity(metrics, now);
+      this.persistMetrics(id, this.store.get(id));
+    }
+    this.activeTaskIds.clear();
     this.store = store;
   }
 
@@ -248,8 +261,10 @@ export class TaskWidget {
     now = Date.now(),
   ): TaskMetrics {
     const metrics: TaskMetrics = {
+      usageAttribution: hasLegacyTaskUsage(existingStats) ? undefined : "exclusive",
       startedAt,
       activeDurationMs: this.initialActiveDurationMs(existingStats, now),
+      activityShare: 0,
       continuousActivity: Boolean(task.metadata?.agentId),
       inputTokens: existingStats?.inputTokens ?? 0,
       outputTokens: existingStats?.outputTokens ?? 0,
@@ -258,9 +273,6 @@ export class TaskWidget {
       totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
       costUsd: existingStats?.costUsd ?? 0,
     };
-    if (this.activeTaskIds.has(task.id) && (metrics.continuousActivity || this.agentActive)) {
-      metrics.activeStartedAt = now;
-    }
     return metrics;
   }
 
@@ -270,19 +282,20 @@ export class TaskWidget {
 
   private pauseMetricsActivity(metrics: TaskMetrics, now = Date.now()) {
     if (metrics.activeStartedAt === undefined) return;
-    metrics.activeDurationMs += Math.max(0, now - metrics.activeStartedAt);
+    metrics.activeDurationMs += Math.max(0, now - metrics.activeStartedAt) * metrics.activityShare;
     metrics.activeStartedAt = undefined;
   }
 
   private currentActiveDurationMs(metrics: TaskMetrics, now = Date.now()): number {
     const currentInterval = metrics.activeStartedAt === undefined
       ? 0
-      : Math.max(0, now - metrics.activeStartedAt);
+      : Math.max(0, now - metrics.activeStartedAt) * metrics.activityShare;
     return metrics.activeDurationMs + currentInterval;
   }
 
   private snapshotMetrics(metrics: TaskMetrics, now = Date.now()): TaskExecutionStats {
     return {
+      ...(metrics.usageAttribution ? { usageAttribution: metrics.usageAttribution } : {}),
       startedAt: metrics.startedAt,
       activeDurationMs: this.currentActiveDurationMs(metrics, now),
       inputTokens: metrics.inputTokens,
@@ -294,9 +307,9 @@ export class TaskWidget {
     };
   }
 
-  private persistRunningMetrics(taskId: string, task?: Task) {
+  private persistUnfinishedMetrics(taskId: string, task?: Task) {
     const metrics = this.metrics.get(taskId);
-    if (!metrics || task?.status !== "in_progress") return;
+    if (!metrics || !task || task.status === "completed") return;
 
     const existingStats = isTaskExecutionStats(task.metadata?.executionStats)
       ? task.metadata.executionStats
@@ -313,20 +326,31 @@ export class TaskWidget {
     this.store.update(taskId, { metadata: { executionStats } });
   }
 
+  /** Reassign active time with the same ownership rule as foreground token usage. */
+  private syncMetricsActivity(tasks = this.store.list(), now = Date.now()) {
+    const foreground = new Set(foregroundTaskIds(tasks, this.activeTaskIds));
+    for (const task of tasks) {
+      const metrics = this.metrics.get(task.id);
+      if (!metrics) continue;
+      metrics.continuousActivity = Boolean(task.metadata.agentId);
+      const active = task.status === "in_progress" && this.activeTaskIds.has(task.id);
+      const share = !active ? 0 : metrics.continuousActivity ? 1
+        : this.agentActive && foreground.has(task.id) ? 1 / foreground.size : 0;
+      if (metrics.activityShare === share) continue;
+      this.pauseMetricsActivity(metrics, now);
+      metrics.activityShare = share;
+      if (share > 0) this.resumeMetricsActivity(metrics, now);
+    }
+  }
+
   /** Mark foreground agent activity so idle waits do not dilute token throughput. */
   setAgentActive(active: boolean) {
     if (this.agentActive === active) return;
     this.agentActive = active;
-    const now = Date.now();
-
-    for (const taskId of this.activeTaskIds) {
-      const metrics = this.metrics.get(taskId);
-      if (!metrics || metrics.continuousActivity) continue;
-      if (active) {
-        this.resumeMetricsActivity(metrics, now);
-      } else {
-        this.pauseMetricsActivity(metrics, now);
-        this.persistRunningMetrics(taskId, this.store.get(taskId));
+    this.syncMetricsActivity();
+    if (!active) {
+      for (const taskId of this.activeTaskIds) {
+        this.persistUnfinishedMetrics(taskId, this.store.get(taskId));
       }
     }
     this.update();
@@ -336,6 +360,7 @@ export class TaskWidget {
   private persistStartMetrics(taskId: string, startedAt: number, existingStats?: TaskExecutionStats) {
     const executionStats: TaskExecutionStats = {
       ...existingStats,
+      ...(!hasLegacyTaskUsage(existingStats) ? { usageAttribution: "exclusive" as const } : {}),
       startedAt,
       inputTokens: existingStats?.inputTokens ?? 0,
       outputTokens: existingStats?.outputTokens ?? 0,
@@ -361,6 +386,7 @@ export class TaskWidget {
       const startedAt = existingStats?.startedAt ?? metrics.startedAt;
       const completedAt = existingStats?.completedAt ?? task.updatedAt;
       const stats: CompletedTaskExecutionStats = {
+        ...(metrics.usageAttribution ? { usageAttribution: metrics.usageAttribution } : {}),
         startedAt,
         completedAt,
         durationMs: Math.max(0, completedAt - startedAt),
@@ -386,16 +412,20 @@ export class TaskWidget {
           : undefined;
         return [blockerStats?.completedAt ?? blocker.updatedAt];
       });
-    const startedAt = Math.max(task.createdAt, ...blockerCompletedAt);
+    const startedAt = existingStats?.startedAt ?? Math.max(task.createdAt, ...blockerCompletedAt);
+    const completedAt = existingStats?.completedAt ?? task.updatedAt;
     return {
+      ...existingStats,
+      ...(!hasLegacyTaskUsage(existingStats) ? { usageAttribution: "exclusive" as const } : {}),
       startedAt,
-      completedAt: task.updatedAt,
-      durationMs: Math.max(0, task.updatedAt - startedAt),
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 0,
+      completedAt,
+      durationMs: Math.max(0, completedAt - startedAt),
+      activeDurationMs: this.initialActiveDurationMs(existingStats, completedAt),
+      inputTokens: existingStats?.inputTokens ?? 0,
+      outputTokens: existingStats?.outputTokens ?? 0,
+      cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
+      cacheWriteTokens: existingStats?.cacheWriteTokens ?? 0,
+      totalTokens: existingStats ? (calculateTotalTokens(existingStats) ?? 0) : 0,
     };
   }
 
@@ -408,6 +438,8 @@ export class TaskWidget {
 
     if (task?.status === "completed" && (!isCompletedTaskExecutionStats(existingStats) || m)) {
       this.store.update(taskId, { metadata: { executionStats: this.inferCompletedStats(task, m) } });
+    } else {
+      this.persistUnfinishedMetrics(taskId, task);
     }
 
     if (m) {
@@ -450,6 +482,7 @@ export class TaskWidget {
         this.store.update(task.id, { metadata: { executionStats: this.inferCompletedStats(task) } });
       }
     }
+    this.syncMetricsActivity(tasks);
   }
 
   /** Add or remove a task from the active spinner set. */
@@ -472,11 +505,6 @@ export class TaskWidget {
         if (!existingStats) {
           this.persistStartMetrics(taskId, startedAt);
         }
-      } else {
-        metrics.continuousActivity = Boolean(task.metadata?.agentId);
-        if (metrics.continuousActivity || this.agentActive) {
-          this.resumeMetricsActivity(metrics);
-        }
       }
       this.ensureTimer();
     } else if (taskId) {
@@ -489,10 +517,11 @@ export class TaskWidget {
       this.activeTaskIds.delete(taskId);
       this.persistMetrics(taskId, task);
     }
+    this.syncMetricsActivity();
     this.update();
   }
 
-  /** Record token usage and model cost for the currently active task(s). */
+  /** Allocate one foreground turn across active leaves, counting every token once. */
   addTokenUsage(
     inputTokens: number,
     outputTokens: number,
@@ -501,25 +530,20 @@ export class TaskWidget {
     cacheReadTokens = 0,
     cacheWriteTokens = 0,
   ) {
-    // Distribute to all currently active tasks
-    for (const id of this.activeTaskIds) {
-      const m = this.metrics.get(id);
-      if (m) {
-        m.inputTokens += inputTokens;
-        m.outputTokens += outputTokens;
-        if (Number.isFinite(cacheReadTokens) && cacheReadTokens > 0) {
-          m.cacheReadTokens += cacheReadTokens;
-        }
-        if (Number.isFinite(cacheWriteTokens) && cacheWriteTokens > 0) {
-          m.cacheWriteTokens += cacheWriteTokens;
-        }
-        if (Number.isFinite(totalTokens) && totalTokens > 0) {
-          m.totalTokens += totalTokens;
-        }
-        if (Number.isFinite(costUsd) && costUsd > 0) {
-          m.costUsd += costUsd;
-        }
-      }
+    const ids = foregroundTaskIds(this.store.list(), this.activeTaskIds).filter(id => this.metrics.has(id));
+    for (const [index, id] of ids.entries()) {
+      // Keep integer token counts and distribute remainders deterministically.
+      const share = (tokens: number) => {
+        if (!Number.isFinite(tokens) || tokens <= 0) return 0;
+        return Math.floor(tokens / ids.length) + (index < tokens % ids.length ? 1 : 0);
+      };
+      const m = this.metrics.get(id)!;
+      m.inputTokens += share(inputTokens);
+      m.outputTokens += share(outputTokens);
+      m.cacheReadTokens += share(cacheReadTokens);
+      m.cacheWriteTokens += share(cacheWriteTokens);
+      m.totalTokens += share(totalTokens);
+      if (Number.isFinite(costUsd) && costUsd > 0) m.costUsd += costUsd / ids.length;
     }
   }
 
@@ -530,11 +554,28 @@ export class TaskWidget {
     }
   }
 
-  private formatLiveStats(theme: Theme, taskId: string): string {
-    const metrics = this.metrics.get(taskId);
-    if (!metrics) return "";
-    const now = Date.now();
-    return formatWidgetStats(theme, this.snapshotMetrics(metrics, now), now);
+  /** Honor explicit metadata replacement instead of shadowing it with an older live snapshot. */
+  refreshExecutionStats(taskId: string) {
+    this.metrics.delete(taskId);
+    const task = this.store.get(taskId);
+    if (task?.status === "in_progress") {
+      const stats = isTaskExecutionStats(task.metadata.executionStats) ? task.metadata.executionStats : undefined;
+      this.metrics.set(taskId, this.createMetrics(task, stats?.startedAt ?? Date.now(), stats));
+    }
+    this.syncMetricsActivity();
+  }
+
+  /** Shared live/persisted report for the widget, task tools, and task picker. */
+  getExecutionStats(tasks = this.store.list(), now = Date.now()): Map<string, TaskExecutionStats> {
+    return aggregateTaskExecutionStats(tasks, task => {
+      const metrics = task.status === "in_progress" ? this.metrics.get(task.id) : undefined;
+      if (metrics) {
+        const stats = this.snapshotMetrics(metrics, now);
+        if (metrics.costUsd === 0 && task.metadata.executionStats?.costUsd === undefined) delete stats.costUsd;
+        return stats;
+      }
+      return isTaskExecutionStats(task.metadata.executionStats) ? task.metadata.executionStats : undefined;
+    }, now);
   }
 
   /** Build widget lines from current live state. Called from the render callback. */
@@ -547,6 +588,8 @@ export class TaskWidget {
     if (tasks.length === 0) return [];
 
     const statusText = formatTaskSummary(tasks);
+    const now = Date.now();
+    const executionStats = this.getExecutionStats(tasks, now);
 
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
@@ -596,21 +639,16 @@ export class TaskWidget {
         const form = task.activeForm || task.subject;
         const agentId = task.metadata?.agentId;
         const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
-        const stats = this.formatLiveStats(theme, task.id);
+        const stats = formatWidgetStats(theme, executionStats.get(task.id), now);
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
       } else if (task.status === "completed") {
-        const stats = isCompletedTaskExecutionStats(task.metadata.executionStats)
-          ? task.metadata.executionStats
-          : undefined;
-        const statSuffix = formatWidgetStats(theme, stats);
+        const statSuffix = formatWidgetStats(theme, executionStats.get(task.id), now);
         text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}${statSuffix}`;
       } else {
         const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
           : "";
-        const stats = task.status === "in_progress"
-          ? this.formatLiveStats(theme, task.id)
-          : "";
+        const stats = formatWidgetStats(theme, executionStats.get(task.id), now);
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${stats}`;
       }
 

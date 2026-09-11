@@ -49,8 +49,8 @@ export class AutoClearManager {
     return this.getMode() === "oldest" && this.clearOldestCompletedOverflow();
   }
 
-  /** Keep completed subtasks in the totals until their ancestors finish. */
-  private hasUnfinishedAncestor(task: Task): boolean {
+  /** Keep descendant counters while an ancestor's inclusive report is still retained. */
+  private hasRetainedAncestor(task: Task, clearing: ReadonlySet<string>): boolean {
     const store = this.getStore();
     const visited = new Set<string>([task.id]);
     let parentId = task.parentTaskId;
@@ -58,10 +58,28 @@ export class AutoClearManager {
       visited.add(parentId);
       const parent = store.get(parentId);
       if (!parent) return false;
-      if (parent.status !== "completed") return true;
+      if (!clearing.has(parent.id)) return true;
       parentId = parent.parentTaskId;
     }
     return false;
+  }
+
+  /** Remove ancestors before descendants so a retained parent's totals never shrink. */
+  private clearCandidates(candidates: Task[], limit = candidates.length): boolean {
+    const clearing = new Set<string>();
+    let previousSize = -1;
+    while (clearing.size < limit && previousSize !== clearing.size) {
+      previousSize = clearing.size;
+      for (const task of candidates) {
+        if (clearing.size >= limit) break;
+        if (!clearing.has(task.id) && !this.hasRetainedAncestor(task, clearing)) clearing.add(task.id);
+      }
+    }
+    for (const id of clearing) {
+      this.getStore().delete(id);
+      this.completedAtTurn.delete(id);
+    }
+    return clearing.size > 0;
   }
 
   /** Clear eligible oldest completed tasks toward the maxVisible target. */
@@ -75,16 +93,7 @@ export class AutoClearManager {
     const overflowCount = tasks.length - maxVisible;
     if (overflowCount <= 0) return false;
 
-    const tasksToClear = tasks
-      .filter(task => task.status === "completed" && !this.hasUnfinishedAncestor(task))
-      .slice(0, overflowCount);
-
-    for (const task of tasksToClear) {
-      store.delete(task.id);
-      this.completedAtTurn.delete(task.id);
-    }
-
-    return tasksToClear.length > 0;
+    return this.clearCandidates(tasks.filter(task => task.status === "completed"), overflowCount);
   }
 
   /** Check if all tasks are completed and start/reset the batch countdown. */
@@ -121,17 +130,17 @@ export class AutoClearManager {
     }
 
     if (mode === "on_task_complete") {
+      const candidates: Task[] = [];
       for (const [taskId, turn] of this.completedAtTurn) {
         const task = this.getStore().get(taskId);
         if (!task || task.status !== "completed") {
           // Task was deleted or reverted — drop stale tracking entry
           this.completedAtTurn.delete(taskId);
-        } else if (currentTurn - turn >= this.clearDelayTurns && !this.hasUnfinishedAncestor(task)) {
-          this.getStore().delete(taskId);
-          this.completedAtTurn.delete(taskId);
-          cleared = true;
+        } else if (currentTurn - turn >= this.clearDelayTurns) {
+          candidates.push(task);
         }
       }
+      cleared = this.clearCandidates(candidates);
     } else if (mode === "on_list_complete" && this.allCompletedAtTurn !== null) {
       if (currentTurn - this.allCompletedAtTurn >= this.clearDelayTurns) {
         this.getStore().clearCompleted();

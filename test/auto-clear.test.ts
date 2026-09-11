@@ -296,6 +296,35 @@ describe("auto-clear: oldest mode", () => {
 });
 
 describe("auto-clear: subtask history", () => {
+  it("retains child counters while a completed parent is waiting for its cleanup deadline", () => {
+    const store = new TaskStore();
+    const manager = new AutoClearManager(() => store, () => "on_task_complete", 4);
+    const parent = store.create("Parent", "Desc");
+    const child = store.createSubtask(parent.id, "Child", "Desc");
+    store.update(child.id, { status: "completed" });
+    manager.trackCompletion(child.id, 1);
+    store.update(parent.id, { status: "completed" });
+    manager.trackCompletion(parent.id, 4);
+    expect(manager.onTurnStart(5)).toBe(false);
+    expect(store.list().map(task => task.id)).toEqual([parent.id, child.id]);
+    expect(manager.onTurnStart(8)).toBe(true);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("removes a completed parent before its older child when trimming one row", () => {
+    const store = new TaskStore();
+    const manager = new AutoClearManager(() => store, () => "oldest", 4, () => 2);
+    const parent = store.create("Parent", "Desc");
+    const child = store.createSubtask(parent.id, "Child", "Desc");
+    store.create("Unfinished", "Desc");
+    store.update(child.id, { status: "completed" });
+    child.updatedAt = 1;
+    store.update(parent.id, { status: "completed" });
+    expect(manager.onTaskListChanged()).toBe(true);
+    expect(store.get(parent.id)).toBeUndefined();
+    expect(store.get(child.id)).toBeDefined();
+    expect(store.list()).toHaveLength(2);
+  });
   it.each<AutoClearMode>(["oldest", "on_task_complete"])(
     "keeps nested completed subtasks until their unfinished ancestor completes in %s mode",
     mode => {

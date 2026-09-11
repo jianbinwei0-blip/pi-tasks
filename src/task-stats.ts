@@ -1,4 +1,87 @@
-import type { TaskExecutionStats } from "./types.js";
+import { isTaskExecutionStats, type Task, type TaskExecutionStats } from "./types.js";
+
+/**
+ * Build inclusive reports from task-local counters. Never persist these rollups:
+ * each own record contributes once to itself and each reachable ancestor.
+ * Dependency edges, display order, and visibility do not affect accounting.
+ */
+export function aggregateTaskExecutionStats(
+  tasks: Task[],
+  ownStatsForTask = (task: Task): TaskExecutionStats | undefined => (
+    isTaskExecutionStats(task.metadata.executionStats) ? task.metadata.executionStats : undefined
+  ),
+  nowMs = Date.now(),
+): Map<string, TaskExecutionStats> {
+  const tasksById = new Map(tasks.map(task => [task.id, task]));
+  const ownStats = new Map(tasks.map(task => [task.id, ownStatsForTask(task)]));
+  const reports = new Map<string, TaskExecutionStats>();
+  const legacyRecords = new Map<string, number>();
+
+  for (const task of tasks) {
+    const own = ownStats.get(task.id);
+    if (!own) continue;
+    const visited = new Set<string>();
+    let target: Task | undefined = task;
+    while (target && !visited.has(target.id)) {
+      visited.add(target.id);
+      const targetOwn = ownStats.get(target.id);
+      let report = reports.get(target.id);
+      if (!report) {
+        // Keep the task's wall-clock window; active agent time is additive instead.
+        report = { startedAt: targetOwn?.startedAt ?? own.startedAt };
+        if (targetOwn?.completedAt !== undefined) report.completedAt = targetOwn.completedAt;
+        if (targetOwn?.durationMs !== undefined) report.durationMs = targetOwn.durationMs;
+        if (!targetOwn && target.status === "completed") report.completedAt = target.updatedAt;
+        reports.set(target.id, report);
+      }
+      if (!targetOwn) {
+        report.startedAt = Math.min(report.startedAt, own.startedAt);
+        if (report.completedAt !== undefined) {
+          report.durationMs = Math.max(0, report.completedAt - report.startedAt);
+        }
+      }
+      for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costUsd"] as const) {
+        if (own[key] !== undefined) report[key] = (report[key] ?? 0) + Math.max(0, own[key]);
+      }
+      if (hasLegacyTaskUsage(own)) {
+        const count = (legacyRecords.get(target.id) ?? 0) + 1;
+        legacyRecords.set(target.id, count);
+        if (count > 1) report.legacyUsageOverlap = true;
+      }
+      // Resolve legacy fallbacks per record, not after mixing reported and missing totals.
+      report.totalTokens = (report.totalTokens ?? 0) + (calculateTotalTokens(own) ?? 0);
+      const activeDurationMs = own.activeDurationMs ?? own.durationMs ?? (own.completedAt ?? nowMs) - own.startedAt;
+      report.activeDurationMs = (report.activeDurationMs ?? 0) + Math.max(0, activeDurationMs);
+      target = target.parentTaskId ? tasksById.get(target.parentTaskId) : undefined;
+    }
+  }
+  return reports;
+}
+
+/** Legacy records lack the provenance needed to safely deduplicate shared foreground work. */
+export function hasLegacyTaskUsage(stats: TaskExecutionStats | undefined): boolean {
+  return stats !== undefined && stats.usageAttribution !== "exclusive"
+    && ((calculateTotalTokens(stats) ?? 0) > 0 || (stats.costUsd ?? 0) > 0);
+}
+
+/** Foreground work belongs to active leaves, not also to their active ancestors. */
+export function foregroundTaskIds(tasks: Task[], activeTaskIds: ReadonlySet<string>): string[] {
+  const tasksById = new Map(tasks.map(task => [task.id, task]));
+  const candidates = tasks.filter(task => (
+    task.status === "in_progress" && activeTaskIds.has(task.id) && !task.metadata.agentId
+  ));
+  const ancestors = new Set<string>();
+  for (const task of candidates) {
+    const visited = new Set([task.id]);
+    let parentId = task.parentTaskId;
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      ancestors.add(parentId);
+      parentId = tasksById.get(parentId)?.parentTaskId;
+    }
+  }
+  return candidates.filter(task => !ancestors.has(task.id)).map(task => task.id);
+}
 
 export type OutputTokenRateStats = Pick<
   TaskExecutionStats,

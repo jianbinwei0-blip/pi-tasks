@@ -756,6 +756,124 @@ describe("Standalone operation (no subagents extension)", () => {
   });
 });
 
+describe("Hierarchical execution reports", () => {
+  let mock: ReturnType<typeof mockPi>;
+  let ctx: ReturnType<typeof mockCtx>;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-13T15:04:00Z"));
+    fs.mkdirSync(path.join(testAgentDir!, "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(testAgentDir!, "extensions", "pi-tasks.json"), JSON.stringify({
+      taskCreationMode: "always", autoClearCompleted: "never",
+    }));
+    mock = mockPi();
+    ctx = mockCtx();
+    initExtension(mock.pi as any);
+    await mock.fireLifecycle("before_agent_start", { prompt: "Work" }, ctx);
+    await mock.fireLifecycle("agent_start", {});
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it.each(["exclusive", "legacy"])("uses the same persisted rollup in every report (%s counters)", async accounting => {
+    const attribution = accounting === "exclusive" ? { usageAttribution: "exclusive" } : {};
+    await mock.executeTool("TaskCreate", {
+      subject: "Parent", description: "desc", metadata: {
+        executionStats: {
+          ...attribution, startedAt: Date.now() - 60_000, completedAt: Date.now(), durationMs: 60_000,
+          activeDurationMs: 10_000, inputTokens: 100, outputTokens: 100, totalTokens: 200, costUsd: 1,
+        }, note: "keep me",
+      },
+    });
+    await mock.executeTool("TaskCreate", {
+      subject: "Child", description: "desc", metadata: {
+        executionStats: {
+          ...attribution, startedAt: Date.now() - 20_000, completedAt: Date.now(), durationMs: 20_000,
+          activeDurationMs: 20_000, inputTokens: 50, outputTokens: 200, cacheReadTokens: 450,
+          totalTokens: 700, costUsd: 2,
+        },
+      },
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "1.1", status: "completed" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+
+    const list = (await mock.executeTool("TaskList", {})).content[0].text;
+    expect(list).toContain("#1 [completed] Parent [$3.00] [900 tok] [75.0% cache hit] [10.0 tok/s]");
+    expect(list.includes("legacy overlap possible")).toBe(accounting === "legacy");
+    const detail = (await mock.executeTool("TaskGet", { taskId: "1" })).content[0].text;
+    expect(detail).toContain("↑ 150 · ↓ 300 · 900 tok · 75.0% cache hit · 10.0 tok/s · $3.00");
+    expect(detail).toContain('Metadata: {"note":"keep me"}');
+    expect(detail).not.toContain('"executionStats"');
+    expect(detail.includes("legacy overlap possible")).toBe(accounting === "legacy");
+
+    const select = vi.fn().mockResolvedValueOnce("View all tasks (2)")
+      .mockImplementationOnce(async (_title, choices: string[]) => {
+        expect(choices[0]).toContain("Parent · $3.00 · 900 tok · 75.0% cache hit · 10.0 tok/s");
+        expect(choices[0].includes("legacy overlap possible")).toBe(accounting === "legacy");
+        return undefined;
+      });
+    await mock.commands.get("tasks").handler("", { ...ctx, ui: { ...ctx.ui, select } });
+    const factory = ctx.ui.setWidget.mock.calls.find(([, content]) => typeof content === "function")?.[1];
+    const theme = { fg: (_: string, text: string) => text, bold: (s: string) => s, strikethrough: (s: string) => s };
+    const lines = factory({ terminal: { columns: 240 }, requestRender() {} }, theme).render();
+    expect(lines[1]).toContain("↑150 ↓300 Σ900 ⨀75.0% · 10.0 t/s · $3.00");
+    expect(lines[1].includes("legacy overlap possible")).toBe(accounting === "legacy");
+    expect((await mock.executeTool("TaskList", {})).content[0].text).toBe(list);
+  });
+
+  it("includes newly reported background counters in live and completed parent totals", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Parent", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    await mock.executeTool("TaskCreate", {
+      subject: "Background", description: "desc", metadata: { agentId: "worker" },
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "1.1", status: "in_progress" });
+    vi.advanceTimersByTime(10_000);
+    await mock.fireLifecycle("turn_end", {
+      message: { role: "assistant", usage: { input: 10, output: 100, totalTokens: 110, cost: { total: 1 } } },
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "1.1", metadata: {
+      executionStats: {
+        usageAttribution: "exclusive", startedAt: Date.now() - 20_000, activeDurationMs: 20_000,
+        inputTokens: 20, outputTokens: 200, totalTokens: 220, costUsd: 2,
+      },
+    } });
+    expect((await mock.executeTool("TaskList", {})).content[0].text).toContain(
+      "#1 [in_progress] Parent [$3.00] [330 tok] [10.0 tok/s]",
+    );
+    await mock.executeTool("TaskUpdate", { taskId: "1.1", status: "completed" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+    const detail = (await mock.executeTool("TaskGet", { taskId: "1" })).content[0].text;
+    expect(detail).toContain("↑ 30 · ↓ 300 · 330 tok · 10.0 tok/s · $3.00");
+    expect(detail).not.toContain("legacy overlap possible");
+  });
+
+  it("shows current live counters and retains child usage when it returns to pending", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Parent", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    vi.advanceTimersByTime(10_000);
+    await mock.fireLifecycle("turn_end", {
+      message: { role: "assistant", usage: { input: 10, output: 100, totalTokens: 110, cost: { total: 1 } } },
+    });
+    await mock.executeTool("TaskCreate", { subject: "Child", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1.1", status: "in_progress" });
+    vi.advanceTimersByTime(20_000);
+    await mock.fireLifecycle("turn_end", {
+      message: { role: "assistant", usage: { input: 20, output: 200, totalTokens: 220, cost: { total: 2 } } },
+    });
+    const list = (await mock.executeTool("TaskList", {})).content[0].text;
+    expect(list).toContain("#1 [in_progress] Parent [$3.00] [330 tok] [10.0 tok/s]");
+    expect(list).toContain("#1.1 [in_progress] Child [$2.00] [220 tok] [10.0 tok/s]");
+    expect(list).not.toContain("legacy overlap possible");
+    await mock.executeTool("TaskUpdate", { taskId: "1.1", status: "pending" });
+    await mock.fireLifecycle("agent_end", {});
+    vi.advanceTimersByTime(60_000);
+    const detail = (await mock.executeTool("TaskGet", { taskId: "1" })).content[0].text;
+    expect(detail).toContain("↑ 30 · ↓ 300 · 330 tok · 10.0 tok/s · $3.00");
+  });
+});
+
 describe("RPC protocol correctness", () => {
   it("ping uses scoped reply channel (not shared channel)", () => {
     const mock = mockPi();

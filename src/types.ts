@@ -4,18 +4,23 @@
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
 
+/** Stored counters are task-local; inclusive reports are derived, never stored here. */
 export interface TaskExecutionStats {
+  /** New counters allocate shared work once; absent on legacy, potentially overlapping records. */
+  usageAttribution?: "exclusive";
+  /** Report-only warning when multiple legacy usage records contribute to a rollup. */
+  legacyUsageOverlap?: boolean;
   startedAt: number;
   completedAt?: number;
   /** Wall-clock duration from task start to completion. */
   durationMs?: number;
-  /** Accumulated time spent inside active agent runs, excluding waits for user input. */
+  /** Allocated active agent time, excluding user waits and time attributed to other tasks. */
   activeDurationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
-  /** Provider-reported total, including cache-read and cache-write tokens. */
+  /** Allocated provider-reported total, including cache-read and cache-write tokens. */
   totalTokens?: number;
   costUsd?: number;
 }
@@ -30,6 +35,8 @@ export type CompletedTaskExecutionStats = TaskExecutionStats & {
 export function isTaskExecutionStats(value: unknown): value is TaskExecutionStats {
   if (!value || typeof value !== "object") return false;
   const stats = value as Record<string, unknown>;
+  if (stats.usageAttribution !== undefined && stats.usageAttribution !== "exclusive") return false;
+  if (stats.legacyUsageOverlap !== undefined && typeof stats.legacyUsageOverlap !== "boolean") return false;
   if (typeof stats.startedAt !== "number" || !Number.isFinite(stats.startedAt)) return false;
   for (const key of [
     "completedAt",

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Inclusive parent execution statistics** — the widget, `TaskList`, `TaskGet`, and `/tasks` picker now use the same live/persisted rollup of a parent's own counters and all stored descendants. Hidden and completed subtasks count, cache ratios and throughput are recomputed from aggregate counters, and repeated reads never compound stored totals.
+- **Shared foreground accounting** — tokens, costs, and active time are allocated once across active foreground leaves rather than copied into every active task. Background tasks no longer inherit unrelated foreground usage. Legacy counters remain intact and potentially overlapping parent totals are labeled `legacy overlap possible`.
+- **Retained completed-parent statistics** — automatic cleanup removes eligible ancestors before descendants, so a completed parent's totals remain intact until that parent is removed. Pausing a task preserves its own counters, and completing an untracked parent does not invent active agent time or discard reported usage.
 - **Stable subtask totals during active work** — automatic `oldest` and `on_task_complete` cleanup now retain completed subtasks while any ancestor is unfinished. Hidden completed rows remain in the header's total and status breakdown (for example, `6 subtasks (3 done, 1 running, 2 blocked)` with only four subtask rows displayed).
 - **Hierarchy-aware widget summaries** — parent roll-up statuses are now summarized separately from subtask execution (for example, `1 active task · 4 subtasks (1 running, 3 blocked)`), and pending work is split into `ready` and `blocked` instead of being grouped ambiguously as `open`.
 - **Cent-precision task costs** — model costs now round to exactly two decimal places in the widget, `TaskList`, `TaskGet`, and `/tasks` picker (for example, `$0.661` displays as `$0.66`).

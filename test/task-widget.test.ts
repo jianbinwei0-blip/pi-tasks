@@ -101,6 +101,7 @@ describe("TaskWidget", () => {
     widget.update();
 
     expect(store.get("1")!.metadata.executionStats).toEqual({
+      usageAttribution: "exclusive",
       startedAt: 1776092700000,
       inputTokens: 0,
       outputTokens: 0,
@@ -145,6 +146,7 @@ describe("TaskWidget", () => {
     widget.setActiveTask("1", true);
 
     expect(store.get("1")!.metadata.executionStats).toEqual({
+      usageAttribution: "exclusive",
       startedAt: 1776092640000,
       inputTokens: 0,
       outputTokens: 0,
@@ -206,7 +208,7 @@ describe("TaskWidget", () => {
     expect(lines[1]).toContain("10.0 t/s");
   });
 
-  it("keeps autonomous background-agent time continuous", () => {
+  it("keeps background-agent time continuous without copying foreground usage", () => {
     widget.setAgentActive(false);
     store.create("Background task", "Desc", "Running", { agentId: "agent-1" });
     store.update("1", { status: "in_progress" });
@@ -219,9 +221,9 @@ describe("TaskWidget", () => {
 
     expect(store.get("1")!.metadata.executionStats).toMatchObject({
       activeDurationMs: 10_000,
-      outputTokens: 100,
+      outputTokens: 0,
     });
-    expect(renderWidget(ui.state)[1]).toContain("10.0 t/s");
+    expect(renderWidget(ui.state)[1]).not.toContain("t/s");
   });
 
   it("renders completed stats in the compact 24-hour format", () => {
@@ -862,7 +864,186 @@ describe("TaskWidget", () => {
     expect(lines[2]).toContain("Processing B…");
   });
 
-  it("distributes token usage across all active tasks", () => {
+  it("rolls up hidden completed descendants without replacing the parent's own counters", () => {
+    widget.dispose();
+    widget = new TaskWidget(store, { maxVisible: 1 });
+    widget.setUICtx(ui.ctx);
+    const startedAt = new Date(2026, 3, 13, 13, 0, 0).getTime();
+    vi.setSystemTime(startedAt + 60_000);
+    store.create("Parent", "Desc", undefined, {
+      executionStats: {
+        startedAt, activeDurationMs: 10_000,
+        inputTokens: 100, outputTokens: 100, totalTokens: 200, costUsd: 1,
+      },
+    });
+    store.update("1", { status: "in_progress" });
+    store.createSubtask("1", "Child", "Desc", undefined, {
+      executionStats: {
+        startedAt, completedAt: startedAt + 20_000, durationMs: 20_000,
+        activeDurationMs: 10_000, inputTokens: 100, outputTokens: 200,
+        cacheReadTokens: 600, cacheWriteTokens: 200, totalTokens: 1100, costUsd: 2,
+      },
+    });
+    store.update("1.1", { status: "completed" });
+    store.createSubtask("1.1", "Grandchild", "Desc", undefined, {
+      executionStats: {
+        startedAt, completedAt: startedAt + 30_000, durationMs: 30_000,
+        activeDurationMs: 10_000, inputTokens: 100, outputTokens: 300,
+        cacheReadTokens: 300, totalTokens: 700, costUsd: 3,
+      },
+    });
+    store.update("1.1.1", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("Δ1:00 · ↑300 ↓600 Σ2k ⨀64.3% · 20.0 t/s · $6.00");
+    expect(lines[1]).toContain("legacy overlap possible");
+    expect(lines[2]).toContain("and 2 more");
+    expect(store.get("1")!.metadata.executionStats?.totalTokens).toBe(200);
+    expect(renderWidget(ui.state)).toEqual(lines);
+  });
+
+  it("counts shared foreground work once across active parents and siblings", () => {
+    store.create("Parent", "Desc", "Parent");
+    store.createSubtask("1", "Child A", "Desc", "Child A");
+    store.createSubtask("1", "Child B", "Desc", "Child B");
+    for (const id of ["1", "1.1", "1.2"]) {
+      store.update(id, { status: "in_progress" });
+      widget.setActiveTask(id);
+    }
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(100, 50, 1, 400, 200, 50);
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("↑100 ↓50 Σ400 ⨀57.1% · 5.0 t/s · $1.00");
+    expect(lines[2]).toContain("↑50 ↓25 Σ200 ⨀57.1% · 5.0 t/s · $0.50");
+    expect(lines[3]).toContain("↑50 ↓25 Σ200 ⨀57.1% · 5.0 t/s · $0.50");
+    expect(lines.join("\n")).not.toContain("legacy overlap possible");
+  });
+
+  it("preserves inclusive totals through completion, idle time, and widget recreation", () => {
+    store.create("Parent", "Desc");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(10, 100, 1);
+
+    store.createSubtask("1", "Child", "Desc");
+    store.update("1.1", { status: "in_progress" });
+    widget.setActiveTask("1.1");
+    vi.advanceTimersByTime(20_000);
+    widget.addTokenUsage(20, 200, 2);
+    store.update("1.1", { status: "completed" });
+    widget.setActiveTask("1.1", false);
+
+    widget.setAgentActive(false);
+    vi.advanceTimersByTime(60_000);
+    expect(renderWidget(ui.state)[1]).toContain("↑30 ↓300 Σ330 · 10.0 t/s · $3.00");
+    widget.setAgentActive(true);
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(10, 100, 1);
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      inputTokens: 20, outputTokens: 200, totalTokens: 220, costUsd: 2, activeDurationMs: 20_000,
+    });
+    const before = renderWidget(ui.state);
+    expect(before[1]).toContain("Δ1:40 · ↑40 ↓400 Σ440 · 10.0 t/s · $4.00");
+    expect(before[2]).toContain("Δ0:20 · ↑20 ↓200 Σ220 · 10.0 t/s · $2.00");
+    widget.dispose();
+    widget = new TaskWidget(store);
+    widget.setUICtx(ui.ctx);
+    widget.update();
+    expect(renderWidget(ui.state)).toEqual(before);
+  });
+
+  it("does not reuse another session's live counters when task IDs match", () => {
+    store.create("Old session", "Desc");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+    widget.addTokenUsage(10, 100, 1);
+    const otherStore = new TaskStore();
+    otherStore.create("New session", "Desc", undefined, {
+      executionStats: { startedAt: Date.now(), totalTokens: 500, costUsd: 2 },
+    });
+    otherStore.update("1", { status: "in_progress" });
+    widget.setStore(otherStore);
+    widget.update();
+    expect(widget.getExecutionStats().get("1")).toMatchObject({ totalTokens: 500, costUsd: 2 });
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({ totalTokens: 110, costUsd: 1 });
+  });
+
+  it("adds independently recorded background usage without charging it foreground work", () => {
+    store.create("Parent", "Desc");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+    store.createSubtask("1", "Background", "Desc", undefined, {
+      agentId: "background-agent",
+      executionStats: {
+        usageAttribution: "exclusive", startedAt: Date.now() - 20_000, activeDurationMs: 20_000,
+        inputTokens: 20, outputTokens: 200, totalTokens: 220, costUsd: 2,
+      },
+    });
+    store.update("1.1", { status: "in_progress" });
+    widget.setActiveTask("1.1");
+    vi.advanceTimersByTime(10_000);
+    widget.addTokenUsage(10, 100, 1);
+    expect(widget.getExecutionStats().get("1.1")).toMatchObject({
+      inputTokens: 20, outputTokens: 200, totalTokens: 220, costUsd: 2, activeDurationMs: 30_000,
+    });
+    expect(renderWidget(ui.state)[1]).toContain("↑30 ↓300 Σ330 · 7.5 t/s · $3.00");
+  });
+
+  it("does not invent active time for a parent completed without direct work", () => {
+    store.create("Parent", "Desc");
+    vi.advanceTimersByTime(10_000);
+    store.createSubtask("1", "Child", "Desc");
+    store.update("1.1", { status: "in_progress" });
+    widget.setActiveTask("1.1");
+    vi.advanceTimersByTime(20_000);
+    widget.addTokenUsage(20, 200);
+    store.update("1.1", { status: "completed" });
+    widget.setActiveTask("1.1", false);
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+    expect(widget.getExecutionStats().get("1")).toMatchObject({
+      totalTokens: 220, activeDurationMs: 20_000, durationMs: 30_000,
+    });
+    expect(renderWidget(ui.state)[1]).toContain("10.0 t/s");
+  });
+
+  it("preserves reported partial counters when completing a task without live metrics", () => {
+    store.create("Reported task", "Desc", undefined, {
+      executionStats: { startedAt: Date.now(), inputTokens: 30, outputTokens: 200, costUsd: 1 },
+    });
+    vi.advanceTimersByTime(20_000);
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("1", false);
+    expect(store.get("1")!.metadata.executionStats).toMatchObject({
+      totalTokens: 230, activeDurationMs: 20_000, durationMs: 20_000, costUsd: 1,
+    });
+    expect(store.get("1")!.metadata.executionStats?.usageAttribution).toBeUndefined();
+    expect(renderWidget(ui.state)[1]).toContain("↑30 ↓200 Σ230 · 10.0 t/s · $1.00");
+  });
+
+  it("allocates odd token counts without losing remainders", () => {
+    store.create("Parent", "Desc");
+    for (let i = 0; i < 3; i++) {
+      const child = store.createSubtask("1", `Child ${i}`, "Desc");
+      store.update(child.id, { status: "in_progress" });
+      widget.setActiveTask(child.id);
+    }
+    vi.advanceTimersByTime(9000);
+    widget.addTokenUsage(101, 51, 1, 407, 202, 53);
+    const stats = widget.getExecutionStats().get("1")!;
+    expect(stats).toMatchObject({
+      inputTokens: 101, outputTokens: 51, totalTokens: 407, cacheReadTokens: 202,
+      cacheWriteTokens: 53, activeDurationMs: 9000,
+    });
+    expect(stats.costUsd).toBeCloseTo(1);
+  });
+
+  it("splits foreground token usage across active tasks", () => {
     store.create("Task A", "Desc", "A");
     store.create("Task B", "Desc", "B");
     store.update("1", { status: "in_progress" });
@@ -873,11 +1054,11 @@ describe("TaskWidget", () => {
     widget.addTokenUsage(100, 50);
 
     const lines = renderWidget(ui.state);
-    // Both tasks should have the same token counts
-    expect(lines[1]).toContain("↑100");
-    expect(lines[1]).toContain("Σ150");
-    expect(lines[2]).toContain("↑100");
-    expect(lines[2]).toContain("Σ150");
+    // A single foreground turn is allocated, not copied to every task.
+    expect(lines[1]).toContain("↑50");
+    expect(lines[1]).toContain("Σ75");
+    expect(lines[2]).toContain("↑50");
+    expect(lines[2]).toContain("Σ75");
   });
 
   it("dispose clears widget and timer", () => {

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Parent-grouped widget rows** — subtasks now stay beneath their owning parents in every sort mode, with indentation for each nesting level. Display limits retain ancestors needed by visible rows; overflow counts exclude those shown ancestors. Header totals and status counts continue to include all stored subtasks, including hidden completed and nested work across multiple parents.
 - **Inclusive parent execution statistics** — the widget, `TaskList`, `TaskGet`, and `/tasks` picker now use the same live/persisted rollup of a parent's own counters and all stored descendants. Hidden and completed subtasks count, cache ratios and throughput are recomputed from aggregate counters, and repeated reads never compound stored totals.
 - **Shared foreground accounting** — tokens, costs, and active time are allocated once across active foreground leaves rather than copied into every active task. Background tasks no longer inherit unrelated foreground usage. Legacy counters remain intact and potentially overlapping parent totals are labeled `legacy overlap possible`.
 - **Retained completed-parent statistics** — automatic cleanup removes eligible ancestors before descendants, so a completed parent's totals remain intact until that parent is removed. Pausing a task preserves its own counters, and completing an untracked parent does not invent active agent time or discard reported usage.

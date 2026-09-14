@@ -59,6 +59,60 @@ function selectVisibleTasks(
   return TRUNCATE_FNS[hiddenAt](tasks, limit);
 }
 
+interface TaskRow {
+  task: Task;
+  depth: number;
+}
+
+/** Keep selected rows with their ancestors, preserving the configured order among siblings. */
+function groupVisibleTasks(tasks: Task[], selected: Task[]): TaskRow[] {
+  const tasksById = new Map(tasks.map(task => [task.id, task]));
+  const visibleIds = new Set<string>();
+  for (const task of selected) {
+    let current: Task | undefined = task;
+    while (current && !visibleIds.has(current.id)) {
+      visibleIds.add(current.id);
+      current = current.parentTaskId ? tasksById.get(current.parentTaskId) : undefined;
+    }
+  }
+
+  const roots: Task[] = [];
+  const children = new Map<string, Task[]>();
+  for (const task of tasks) {
+    if (!visibleIds.has(task.id)) continue;
+    if (task.parentTaskId && visibleIds.has(task.parentTaskId)) {
+      const siblings = children.get(task.parentTaskId) ?? [];
+      siblings.push(task);
+      children.set(task.parentTaskId, siblings);
+    } else {
+      // Deleted/missing parents must not hide a branch or nest it under another root.
+      roots.push(task);
+    }
+  }
+
+  const rows: TaskRow[] = [];
+  const visited = new Set<string>();
+  const appendBranch = (root: Task) => {
+    const stack: TaskRow[] = [{ task: root, depth: 0 }];
+    while (stack.length > 0) {
+      const row = stack.pop()!;
+      if (visited.has(row.task.id)) continue;
+      visited.add(row.task.id);
+      rows.push(row);
+      const descendants = children.get(row.task.id) ?? [];
+      for (let i = descendants.length - 1; i >= 0; i--) {
+        stack.push({ task: descendants[i], depth: row.depth + 1 });
+      }
+    }
+  };
+  for (const root of roots) appendBranch(root);
+  // Malformed parent cycles have no root. Render each remaining task once, without looping.
+  for (const task of tasks) {
+    if (visibleIds.has(task.id) && !visited.has(task.id)) appendBranch(task);
+  }
+  return rows;
+}
+
 // ---- Types ----
 
 export type Theme = {
@@ -587,6 +641,7 @@ export class TaskWidget {
 
     if (tasks.length === 0) return [];
 
+    // Totals always use the full store, before display selection or parent grouping.
     const statusText = formatTaskSummary(tasks);
     const now = Date.now();
     const executionStats = this.getExecutionStats(tasks, now);
@@ -597,7 +652,8 @@ export class TaskWidget {
     const showAll = this.config.showAll ?? false;
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
     const hiddenAt = this.config.hiddenAt ?? "bottom";
-    const visible = showAll ? tasks : selectVisibleTasks(tasks, limit, sortOrder, hiddenAt);
+    const selected = showAll ? tasks : selectVisibleTasks(tasks, limit, sortOrder, hiddenAt);
+    const visible = groupVisibleTasks(tasks, selected);
 
     const hiddenCount = tasks.length - visible.length;
     const overflowLine = hiddenCount > 0
@@ -607,10 +663,9 @@ export class TaskWidget {
     if (overflowLine && hiddenAt === "top") {
       lines.push(overflowLine);
     }
-    for (let i = 0; i < visible.length; i++) {
-      const task = visible[i];
+    for (const { task, depth } of visible) {
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
-      const indent = task.parentTaskId ? "    " : "  ";
+      const indent = "  ".repeat(depth + 1);
 
       let icon: string;
       if (isActive) {

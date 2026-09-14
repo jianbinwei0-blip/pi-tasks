@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutoClearManager, type AutoClearMode } from "../src/auto-clear.js";
 import { TaskStore } from "../src/task-store.js";
+import type { TasksConfig } from "../src/tasks-config.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 
 /** Create a mock theme that returns raw text (no ANSI escapes). */
@@ -42,6 +43,14 @@ function renderWidget(state: ReturnType<typeof mockUICtx>["state"]): string[] {
   const tui = { terminal: { columns: 200 }, requestRender() {} };
   const result = entry.content(tui, theme);
   return result.render();
+}
+
+/** Extract task rows without confusing dependency references with displayed tasks. */
+function renderedTaskRows(lines: string[]): { id: string; indent: number }[] {
+  return lines.flatMap(line => {
+    const match = line.match(/^(\s+)\S+ (?:~~)?#([\d.]+) /);
+    return match ? [{ id: match[2], indent: match[1].length }] : [];
+  });
 }
 
 describe("TaskWidget", () => {
@@ -537,6 +546,167 @@ describe("TaskWidget", () => {
       expect(lines.some(line => line.includes("Step 2"))).toBe(false);
     },
   );
+
+  it.each<AutoClearMode>(["never", "oldest", "on_task_complete", "on_list_complete"])(
+    "counts hidden completed and nested subtasks across multiple parents with %s cleanup",
+    mode => {
+      widget.dispose();
+      const config: TasksConfig = { sortOrder: "status", hiddenAt: "top", maxVisible: 9 };
+      widget = new TaskWidget(store, config);
+      widget.setUICtx(ui.ctx);
+      const manager = new AutoClearManager(() => store, () => mode, 4, () => 9);
+      const first = store.create("First workflow", "Desc");
+      const second = store.create("Second workflow", "Desc");
+      store.update(first.id, { status: "in_progress" });
+      store.update(second.id, { status: "in_progress" });
+      const steps = Array.from({ length: 8 }, (_, i) =>
+        store.createSubtask(first.id, `Step ${i + 1}`, "Desc")
+      );
+      for (const task of steps.slice(0, 5)) {
+        store.update(task.id, { status: "completed" });
+        manager.trackCompletion(task.id, 1);
+      }
+      store.update(steps[5].id, { addBlockedBy: [steps[6].id, steps[7].id] });
+      const running = store.createSubtask(second.id, "Wire workflow", "Desc");
+      store.update(running.id, { status: "in_progress" });
+      const done = store.createSubtask(second.id, "Verify entrypoints", "Desc");
+      store.update(done.id, { status: "completed" });
+      manager.trackCompletion(done.id, 1);
+      store.createSubtask(running.id, "Map admission", "Desc");
+      store.createSubtask(running.id, "Map readiness", "Desc");
+      manager.onTaskListChanged();
+      manager.onTurnStart(5);
+      widget.update();
+
+      const lines = renderWidget(ui.state);
+      const summary = "● 2 active tasks · 12 subtasks (6 done, 1 running, 4 ready, 1 blocked)";
+      expect(lines[0]).toBe(summary);
+      expect(lines[1]).toContain("5 more");
+      expect(renderedTaskRows(lines).map(row => row.id)).toEqual([
+        "1", "1.6", "1.7", "1.8", "2", "2.2", "2.1", "2.1.1", "2.1.2",
+      ]);
+      expect(lines.filter(line => line.includes("✔"))).toHaveLength(1);
+
+      // Visibility changes must never change the total or any status count.
+      for (const sortOrder of ["id", "status", "recent", "oldest"] as const) {
+        config.sortOrder = sortOrder;
+        for (const hiddenAt of ["top", "bottom"] as const) {
+          config.hiddenAt = hiddenAt;
+          expect(renderWidget(ui.state)[0]).toBe(summary);
+        }
+      }
+      config.showAll = true;
+      const allLines = renderWidget(ui.state);
+      expect(allLines[0]).toBe(summary);
+      expect(renderedTaskRows(allLines)).toHaveLength(14);
+      expect(allLines.some(line => line.includes("more"))).toBe(false);
+    },
+  );
+
+  it.each([
+    { sortOrder: "id", ids: ["1", "1.1", "1.1.1", "1.2", "2", "2.1", "2.2"] },
+    { sortOrder: "status", ids: ["1", "1.2", "1.1", "1.1.1", "2", "2.2", "2.1"] },
+    { sortOrder: "recent", ids: ["2", "2.2", "2.1", "1", "1.2", "1.1", "1.1.1"] },
+    { sortOrder: "oldest", ids: ["1", "1.1", "1.1.1", "1.2", "2", "2.1", "2.2"] },
+  ] as const)("groups and indents descendants beneath parents in $sortOrder order", ({ sortOrder, ids }) => {
+    widget.dispose();
+    widget = new TaskWidget(store, { sortOrder, showAll: true, maxVisible: 2 });
+    widget.setUICtx(ui.ctx);
+    store.create("First parent", "Desc");
+    store.create("Second parent", "Desc");
+    store.createSubtask("1", "First pending", "Desc");
+    store.createSubtask("1", "First done", "Desc");
+    store.createSubtask("2", "Second running", "Desc");
+    store.createSubtask("2", "Second done", "Desc");
+    store.createSubtask("1.1", "Nested done", "Desc");
+    store.update("1", { status: "in_progress" });
+    store.update("2.1", { status: "in_progress" });
+    for (const id of ["1.2", "2.2", "1.1.1"]) store.update(id, { status: "completed" });
+    widget.setActiveTask("2.1");
+
+    const lines = renderWidget(ui.state);
+    expect(renderedTaskRows(lines)).toEqual(ids.map(id => ({ id, indent: id.split(".").length * 2 })));
+    expect(lines.find(line => line.includes("#2.1 "))).toContain("Second running…");
+    expect(lines.some(line => line.includes("more"))).toBe(false);
+  });
+
+  it.each([
+    { sortOrder: "recent", ids: ["1", "1.2", "1.1", "2", "2.1"] },
+    { sortOrder: "oldest", ids: ["2", "2.1", "1", "1.1", "1.2"] },
+  ] as const)("sorts parents and siblings by their own update times in $sortOrder order", ({ sortOrder, ids }) => {
+    widget.dispose();
+    widget = new TaskWidget(store, { sortOrder, showAll: true });
+    widget.setUICtx(ui.ctx);
+    store.create("First parent", "Desc");
+    vi.advanceTimersByTime(1000);
+    store.createSubtask("1", "Older child", "Desc");
+    vi.advanceTimersByTime(1000);
+    store.create("Second parent", "Desc");
+    vi.advanceTimersByTime(1000);
+    store.createSubtask("2", "Other child", "Desc");
+    vi.advanceTimersByTime(1000);
+    store.createSubtask("1", "Newer child", "Desc");
+    vi.advanceTimersByTime(1000);
+    store.update("1", { subject: "Updated first parent" });
+    widget.update();
+
+    expect(renderedTaskRows(renderWidget(ui.state)).map(row => row.id)).toEqual(ids);
+  });
+
+  it.each<TasksConfig>([
+    { sortOrder: "id", hiddenAt: "top" },
+    { sortOrder: "recent", hiddenAt: "bottom" },
+    { sortOrder: "oldest", hiddenAt: "top" },
+    { sortOrder: "status", hiddenAt: "top" },
+    { sortOrder: "status", hiddenAt: "bottom" },
+  ])("keeps the full ancestor chain visible with $sortOrder order and $hiddenAt hiding", config => {
+    widget.dispose();
+    widget = new TaskWidget(store, { ...config, maxVisible: 1 });
+    widget.setUICtx(ui.ctx);
+    store.create("Unrelated task", "Desc");
+    store.create("Parent", "Desc");
+    store.createSubtask("2", "Child", "Desc");
+    store.createSubtask("2.1", "Grandchild", "Desc");
+    const completedIds = config.sortOrder === "status" && config.hiddenAt === "bottom"
+      ? ["2.1.1"]
+      : ["1", "2", "2.1"];
+    for (const id of completedIds) store.update(id, { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(renderedTaskRows(lines)).toEqual([
+      { id: "2", indent: 2 }, { id: "2.1", indent: 4 }, { id: "2.1.1", indent: 6 },
+    ]);
+    expect(lines[config.hiddenAt === "top" ? 1 : lines.length - 1]).toContain("1 more");
+    expect(renderWidget(ui.state)).toEqual(lines);
+  });
+
+  it("keeps orphaned branches visible without placing them under an unrelated task", () => {
+    store.create("Deleted parent", "Desc");
+    store.createSubtask("1", "Orphan", "Desc");
+    store.createSubtask("1.1", "Nested child", "Desc");
+    store.create("Other parent", "Desc");
+    store.delete("1");
+    widget.update();
+
+    expect(renderedTaskRows(renderWidget(ui.state))).toEqual([
+      { id: "1.1", indent: 2 }, { id: "1.1.1", indent: 4 }, { id: "2", indent: 2 },
+    ]);
+  });
+
+  it("renders each task once even with cyclic or self-referencing parent links", () => {
+    const parent = store.create("Cyclic parent", "Desc");
+    const child = store.createSubtask(parent.id, "Cyclic child", "Desc");
+    store.create("Normal task", "Desc");
+    const self = store.create("Self parent", "Desc");
+    parent.parentTaskId = child.id;
+    self.parentTaskId = self.id;
+    widget.update();
+
+    const rows = renderedTaskRows(renderWidget(ui.state));
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map(row => row.id))).toEqual(new Set(["1", "1.1", "2", "3"]));
+  });
 
   it("clears widget when all tasks are deleted", () => {
     store.create("Task", "Desc");

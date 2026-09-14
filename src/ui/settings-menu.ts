@@ -70,7 +70,7 @@ export async function openSettingsMenu(
         label: "Show all tasks in widget",
         description:
           "When ON, every task is shown regardless of the visible limit. " +
-          "When OFF, the list is capped by 'Max visible tasks'.",
+          "When OFF, 'Max visible tasks' sets the display target; ancestors of visible tasks remain shown.",
         currentValue: (cfg.showAll ?? false) ? "on" : "off",
         values: ["on", "off"],
       },
@@ -80,7 +80,8 @@ export async function openSettingsMenu(
         description:
           "For widget display, only applies when 'Show all tasks' is OFF. " +
           "The 'oldest' auto-clear mode also uses it as its cleanup limit. " +
-          "Targets this many task lines; status order with top hiding may exceed it to keep unfinished tasks visible.",
+          "Targets this many task lines; ancestors of visible tasks always remain shown. " +
+          "Status order with top hiding may also exceed it to keep unfinished tasks visible.",
         currentValue: String(cfg.maxVisible ?? 10),
         values: ["5", "10", "15", "20", "30", "50", "100"],
       },
@@ -88,8 +89,9 @@ export async function openSettingsMenu(
         id: "sortOrder",
         label: "Widget sort order",
         description:
-          '"status" groups by completed → in-progress → pending. ' +
-          '"id" sorts by creation order.',
+          "Orders top-level tasks and siblings; children stay beneath their parents. " +
+          '"status": completed → in-progress → pending. "id": creation order. ' +
+          '"recent"/"oldest": last-updated time.',
         currentValue: cfg.sortOrder ?? "id",
         values: ["id", "status", "recent", "oldest"],
       },
@@ -97,7 +99,7 @@ export async function openSettingsMenu(
         id: "hiddenAt",
         label: "Hidden tasks position",
         description:
-          '"bottom" hides tasks from the end of the list. ' +
+          '"bottom" hides tasks from the end of the sorted selection, before parent grouping. ' +
           'With status order, "top" collapses only completed tasks so every unfinished task stays visible.',
         currentValue: cfg.hiddenAt ?? "bottom",
         values: ["bottom", "top"],
@@ -110,7 +112,7 @@ export async function openSettingsMenu(
           "on_list_complete: cleared automatically after all tasks are done. " +
           "on_task_complete: each task cleared shortly after it completes. " +
           "oldest: when the task count exceeds 'Max visible tasks', clear the oldest completed tasks first. " +
-          "Completed subtasks are kept while any ancestor is unfinished. " +
+          "Completed subtasks are kept while any ancestor remains stored. " +
           `Timed clearing modes lag ~${clearDelayTurns} turns.`,
         currentValue: cfg.autoClearCompleted ?? "on_list_complete",
         values: ["never", "on_list_complete", "on_task_complete", "oldest"],

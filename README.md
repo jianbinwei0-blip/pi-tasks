@@ -64,7 +64,9 @@ The extension renders a persistent widget above the editor:
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and model cost when available) |
 
-The header summarizes all stored tasks, including hidden rows, with top-level tasks separate from subtasks so an active parent roll-up is not double-counted as additional subtask execution. Top-level `in_progress` tasks are **active**, subtask `in_progress` tasks are **running**, and pending work is split into **ready** and **blocked** using its unresolved dependencies.
+The header summarizes all stored tasks, including hidden rows, with top-level tasks separate from subtasks so an active parent roll-up is not double-counted as additional subtask execution. Top-level `in_progress` tasks are **active**, subtask `in_progress` tasks are **running**, and pending work is split into **ready** and **blocked** using its unresolved dependencies. Nested subtasks count individually, and changing the display limit or sort order never changes these totals.
+
+Rows stay grouped beneath their parent in every sort mode, with two more spaces of indentation per nesting level. The configured sort order applies to top-level tasks and siblings within each branch. Display limits select rows by the configured sort priority before grouping; every stored ancestor of a selected row is also shown, even if this exceeds `maxVisible`. The `… and N more` indicator counts only rows actually hidden. If a parent has been deleted, its remaining branch is displayed at the top level rather than beneath an unrelated task.
 
 Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. The token group keeps `↑` input, `↓` output, `Σ` total, and `⨀` task-wide cache hit ratio together; `t/s` is average output-token throughput during active agent time. Every decimal token statistic uses one digit after the decimal point, while whole compact counts omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`). Model costs are rounded to cents and always use two decimal places.
 
@@ -80,16 +82,16 @@ Stored `metadata.executionStats` remains task-local; rollups are never written b
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (project override) or JSON files. All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (project override) or JSON files. Parent/child grouping is always applied.
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
-| `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| `maxVisible` | `5`–`100` | `10` | Targets how many task lines the widget shows (ignored for display when `showAll` is on) and sets the cleanup limit for `autoClearCompleted: "oldest"`; `status` + `top` may exceed it to keep every unfinished task visible |
+| `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | Orders top-level tasks and siblings: `id` = creation order; `status` = completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
+| `maxVisible` | `5`–`100` | `10` | Targets how many task lines the widget shows (ignored for display when `showAll` is on) and sets the cleanup limit for `autoClearCompleted: "oldest"`; may be exceeded to show ancestors, or to keep every unfinished task visible with `status` + `top` |
 | `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. With `sortOrder: status`, `top` folds only completed tasks and keeps every unfinished task visible |
+| `hiddenAt` | `bottom` / `top` | `bottom` | Which end of the sorted selection to hide and where the aggregate `… and N more` indicator appears. With `sortOrder: status`, `top` folds only completed tasks and keeps every unfinished task visible |
 
-> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order. If unfinished work alone exceeds `maxVisible`, the widget exceeds that target rather than hiding unfinished tasks.
+> Note: the widget's `status` selection priority is completed-first, which is the reverse of the `TaskList` tool's pending-first order. Rows are then grouped under their parents. If unfinished work alone exceeds `maxVisible` with `hiddenAt: top`, the widget exceeds that target rather than hiding unfinished tasks. Ancestors needed by visible rows remain shown in every mode.
 
 ## Tools
 

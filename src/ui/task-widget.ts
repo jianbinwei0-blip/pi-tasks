@@ -28,6 +28,7 @@ import {
   isTaskExecutionStats,
   type Task,
   type TaskExecutionStats,
+  type TaskProgress,
 } from "../types.js";
 
 // ---- Truncation ----
@@ -205,7 +206,7 @@ function formatWidgetStats(
 
 // ---- Summary ----
 
-function hasOpenBlocker(task: Task, tasksById: Map<string, Task>): boolean {
+function hasOpenBlocker(task: TaskProgress, tasksById: Map<string, TaskProgress>): boolean {
   return task.status === "pending" && task.blockedBy.some(blockerId => {
     const blocker = tasksById.get(blockerId);
     return blocker !== undefined && blocker.status !== "completed";
@@ -213,8 +214,8 @@ function hasOpenBlocker(task: Task, tasksById: Map<string, Task>): boolean {
 }
 
 function formatStatusParts(
-  tasks: Task[],
-  tasksById: Map<string, Task>,
+  tasks: TaskProgress[],
+  tasksById: Map<string, TaskProgress>,
   inProgressLabel: "active" | "running",
 ): string[] {
   let done = 0;
@@ -242,7 +243,7 @@ function formatStatusParts(
   return parts;
 }
 
-function formatTaskSummary(tasks: Task[]): string {
+function formatTaskSummary(tasks: TaskProgress[]): string {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const topLevelTasks = tasks.filter(task => !task.parentTaskId);
   const subtasks = tasks.filter(task => task.parentTaskId);
@@ -256,7 +257,7 @@ function formatTaskSummary(tasks: Task[]): string {
 
   const subtaskParts = formatStatusParts(subtasks, tasksById, "running");
   const subtaskSummary = `${subtasks.length} ${subtasks.length === 1 ? "subtask" : "subtasks"} (${subtaskParts.join(", ")})`;
-  return `${topLevelSummary} · ${subtaskSummary}`;
+  return topLevelTasks.length === 0 ? subtaskSummary : `${topLevelSummary} · ${subtaskSummary}`;
 }
 
 // ---- Widget ----
@@ -639,10 +640,11 @@ export class TaskWidget {
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 
-    if (tasks.length === 0) return [];
+    const progress = this.store.getProgress();
+    if (progress.length === 0) return [];
 
-    // Totals always use the full store, before display selection or parent grouping.
-    const statusText = formatTaskSummary(tasks);
+    // Totals include automatically cleared history, not just retained/visible rows.
+    const statusText = formatTaskSummary(progress);
     const now = Date.now();
     const executionStats = this.getExecutionStats(tasks, now);
 
@@ -724,7 +726,7 @@ export class TaskWidget {
     this.syncTrackedTasks(tasks);
 
     // Transition: visible → hidden
-    if (tasks.length === 0) {
+    if (tasks.length === 0 && this.store.getProgress().length === 0) {
       if (this.widgetRegistered) {
         this.uiCtx.setWidget("tasks", undefined);
         this.widgetRegistered = false;

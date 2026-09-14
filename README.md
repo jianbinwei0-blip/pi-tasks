@@ -64,7 +64,7 @@ The extension renders a persistent widget above the editor:
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and model cost when available) |
 
-The header summarizes all stored tasks, including hidden rows, with top-level tasks separate from subtasks so an active parent roll-up is not double-counted as additional subtask execution. Top-level `in_progress` tasks are **active**, subtask `in_progress` tasks are **running**, and pending work is split into **ready** and **blocked** using its unresolved dependencies. Nested subtasks count individually, and changing the display limit or sort order never changes these totals.
+The header summarizes all retained tasks **plus completed-task history**, including hidden rows and automatically cleared completions. Top-level tasks are separate from subtasks so an active parent roll-up is not double-counted as additional subtask execution. Top-level `in_progress` tasks are **active**, subtask `in_progress` tasks are **running**, and pending work is split into **ready** and **blocked** using its unresolved dependencies. Nested subtasks count individually; display limits, sort order, automatic cleanup, and reloads do not erase completed totals. Once every row is automatically cleared, the progress header remains visible by itself.
 
 Rows stay grouped beneath their parent in every sort mode, with two more spaces of indentation per nesting level. The configured sort order applies to top-level tasks and siblings within each branch. Display limits select rows by the configured sort priority before grouping; every stored ancestor of a selected row is also shown, even if this exceeds `maxVisible`. The `… and N more` indicator counts only rows actually hidden. If a parent has been deleted, its remaining branch is displayed at the top level rather than beneath an unrelated task.
 
@@ -249,7 +249,7 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 | `session` **(default)** | `<cwd>/.pi/tasks/tasks-<sessionId>.json` | Per-session file — isolated between sessions, survives resume |
 | `project` | `<cwd>/.pi/tasks/tasks.json` | Shared across all sessions in the project |
 
-On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
+On new session start, if all persisted tasks are completed their rows are auto-cleared while preserving progress history. On session resume or `/reload`, retained tasks and progress history are shown immediately. Initialized stores remain on disk even after an explicit clear: their reset marker prevents old session history from being imported again and preserves ID numbering.
 
 ### Auto-clear completed tasks
 
@@ -264,7 +264,11 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 The `on_list_complete` and `on_task_complete` modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear. The `oldest` mode applies its size limit immediately.
 
-Automatic cleanup retains completed subtasks while any ancestor remains stored, keeping the header breakdown and inclusive statistics intact even when rows are hidden. Eligible ancestors are removed before descendants; a completed parent's totals do not shrink during its cleanup delay. This can leave more than `maxVisible` tasks stored; display limits still apply independently. Manual deletion and **Clear completed** still remove tasks explicitly, including their contribution to retained parents. Tasks already auto-cleared by older versions are not restored.
+Automatic cleanup retains completed subtasks while any ancestor remains stored, keeping inclusive statistics intact even when rows are hidden. Eligible ancestors are removed before descendants; a completed parent's statistics do not shrink during its cleanup delay. This can leave more than `maxVisible` task rows stored; display limits still apply independently. Once rows are removed, minimal completion records preserve their **total and done counts**, not their descriptions or execution statistics. These archived records are not included in `… and N more` or restored by `showAll`.
+
+Explicit task deletion removes that task's count as well. **Clear completed** removes retained completed tasks and archived completion counts; **Clear all** resets both tasks and progress history. Neither reset is undone on reload.
+
+For legacy default session stores, startup/resume/reload performs a one-time recovery of missing completions from successful `TaskUpdate` status changes on the active session branch. Later reopening, explicit task-tool deletion, and ID reuse are respected; retained task states take precedence. Missing IDs alone are never assumed completed. Recovery restores **counts only**, not rows or usage statistics. Completions without recorded successful status updates cannot be recovered this way. Project/shared stores and `PI_TASKS` overrides are not backfilled from an individual session's history.
 
 Settings (`taskScope`, `taskCreationMode`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) can be set globally in `~/.pi/agent/extensions/pi-tasks.json` and overridden per project via `/tasks` → Settings (saved to `<cwd>/.pi/tasks-config.json`). `taskCreationMode` can also be configured through pi-extmgr's package configuration panel.
 

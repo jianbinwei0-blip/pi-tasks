@@ -103,6 +103,69 @@ function mockCtx() {
   };
 }
 
+describe("Legacy progress recovery", () => {
+  it("recovers cleared completions on session_start without restoring rows or repeating recovery", async () => {
+    delete process.env.PI_TASKS;
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(testAgentDir!);
+    try {
+      const file = path.join(testAgentDir!, ".pi", "tasks", "tasks-history-session.json");
+      const store = new TaskStore(file);
+      store.create("Retained parent", "Desc");
+      store.update("1", { status: "in_progress" });
+      store.createSubtask("1", "Cleared completed step", "Desc");
+      store.update("1.1", { status: "completed" });
+      store.delete("1.1"); // Simulate cleanup by an older version.
+      store.createSubtask("1", "Ready step", "Desc");
+      const entries = [
+        { type: "message", message: { role: "assistant", content: [
+          { type: "toolCall", id: "complete", name: "TaskUpdate", arguments: { taskId: "1.1", status: "completed" } },
+        ] } },
+        { type: "message", message: { role: "toolResult", toolCallId: "complete", toolName: "TaskUpdate",
+          content: [{ type: "text", text: "Updated task #1.1 status" }], isError: false } },
+      ];
+      const ctx = {
+        ...mockCtx(),
+        sessionManager: { getSessionId: () => "history-session", getBranch: vi.fn(() => entries) },
+      };
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
+      const factory = ctx.ui.setWidget.mock.calls.find(call => call[1])?.[1];
+      const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text };
+      const lines = factory?.({ terminal: { columns: 200 }, requestRender() {} }, theme).render();
+      expect(lines?.[0]).toBe("● 1 active task · 2 subtasks (1 done, 1 ready)");
+      expect(new TaskStore(file).list().map(task => task.id)).toEqual(["1", "1.2"]);
+
+      const reloaded = mockPi();
+      initExtension(reloaded.pi as any);
+      await reloaded.fireLifecycle("session_start", { reason: "reload" }, ctx);
+      expect(ctx.sessionManager.getBranch).toHaveBeenCalledTimes(1);
+
+      const select = vi.fn().mockResolvedValueOnce("Clear completed (1)").mockResolvedValue(undefined);
+      await reloaded.commands.get("tasks").handler("", { ...ctx, ui: { ...ctx.ui, select } });
+      expect(select.mock.calls[0][1]).toContain("View all tasks (2)");
+      expect(select.mock.calls[0][1]).toContain("Clear completed (1)");
+      expect(select.mock.calls[0][1]).toContain("Clear all (3)");
+      expect(new TaskStore(file).getProgress().map(task => task.id)).toEqual(["1", "1.2"]);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  it("never imports an individual session's history into an explicitly shared store", async () => {
+    process.env.PI_TASKS = path.join(testAgentDir!, "shared-tasks.json");
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = {
+      ...mockCtx(),
+      sessionManager: { getSessionId: () => "unrelated", getBranch: vi.fn(() => { throw new Error("Must not read unrelated history"); }) },
+    };
+    await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
+    expect(ctx.sessionManager.getBranch).not.toHaveBeenCalled();
+    expect(new TaskStore(process.env.PI_TASKS).getProgress()).toEqual([]);
+  });
+});
+
 // ---- Mock subagents extension (RPC responders) ----
 
 /** Simulates the @tintinweb/pi-subagents extension: responds to ping + spawn RPCs and emits ready. */

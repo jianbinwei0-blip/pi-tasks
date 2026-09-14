@@ -516,6 +516,38 @@ describe("TaskWidget", () => {
     expect(lines[0]).toBe("● 1 active task · 4 subtasks (1 running, 3 blocked)");
   });
 
+  it("summarizes archived subtasks without inventing a missing parent", () => {
+    store.initializeCompletedHistory(() => [{ id: "21.14", parentTaskId: "21" }]);
+    widget.update();
+    expect(renderWidget(ui.state)).toEqual(["● 1 subtask (1 done)"]);
+  });
+
+  it.each<AutoClearMode>(["oldest", "on_task_complete", "on_list_complete"])(
+    "keeps completed totals after %s cleanup removes the task rows",
+    mode => {
+      const manager = new AutoClearManager(() => store, () => mode, 4, () => 0);
+      const parent = store.create("Finished workflow", "Desc");
+      const child = store.createSubtask(parent.id, "Finished step", "Desc");
+      const nested = store.createSubtask(child.id, "Finished nested step", "Desc");
+      for (const task of [nested, child, parent]) {
+        store.update(task.id, { status: "completed" });
+        manager.trackCompletion(task.id, 1);
+      }
+      manager.onTurnStart(5);
+      expect(store.list()).toEqual([]);
+      widget.update();
+      expect(renderWidget(ui.state)).toEqual(["● 1 done task · 2 subtasks (2 done)"]);
+
+      const next = store.create("Next workflow", "Desc");
+      store.update(next.id, { status: "in_progress" });
+      widget.update();
+      const lines = renderWidget(ui.state);
+      expect(lines[0]).toBe("● 2 tasks (1 done, 1 active) · 2 subtasks (2 done)");
+      expect(renderedTaskRows(lines).map(row => row.id)).toEqual([next.id]);
+      expect(lines.some(line => line.includes("more"))).toBe(false);
+    },
+  );
+
   it.each<AutoClearMode>(["oldest", "on_task_complete"])(
     "counts all six subtasks when only four are displayed with %s cleanup",
     mode => {

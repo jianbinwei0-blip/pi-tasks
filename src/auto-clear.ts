@@ -1,9 +1,9 @@
 /**
- * auto-clear.ts — Turn-based auto-clearing of completed tasks.
+ * auto-clear.ts — Auto-clearing of completed rows while retaining progress history.
  *
  * Modes:
  * - "never": completed tasks remain until manually cleared
- * - "on_task_complete": each completed task gets its own REMINDER_INTERVAL countdown, deleted individually
+ * - "on_task_complete": each completed task gets its own REMINDER_INTERVAL countdown, archived individually
  * - "on_list_complete": countdown starts when ALL tasks are completed, cleared as a batch
  * - "oldest": when the list exceeds maxVisible, the oldest completed tasks are cleared first
  *
@@ -75,11 +75,9 @@ export class AutoClearManager {
         if (!clearing.has(task.id) && !this.hasRetainedAncestor(task, clearing)) clearing.add(task.id);
       }
     }
-    for (const id of clearing) {
-      this.getStore().delete(id);
-      this.completedAtTurn.delete(id);
-    }
-    return clearing.size > 0;
+    const archived = this.getStore().archiveCompleted([...clearing]);
+    for (const id of clearing) this.completedAtTurn.delete(id);
+    return archived > 0;
   }
 
   /** Clear eligible oldest completed tasks toward the maxVisible target. */
@@ -118,7 +116,7 @@ export class AutoClearManager {
   }
 
   /**
-   * Called on each turn start. Deletes tasks whose linger period has expired.
+   * Called on each turn start. Archives tasks whose linger period has expired.
    * Returns true if any tasks were cleared.
    */
   onTurnStart(currentTurn: number): boolean {
@@ -143,7 +141,7 @@ export class AutoClearManager {
       cleared = this.clearCandidates(candidates);
     } else if (mode === "on_list_complete" && this.allCompletedAtTurn !== null) {
       if (currentTurn - this.allCompletedAtTurn >= this.clearDelayTurns) {
-        this.getStore().clearCompleted();
+        this.getStore().archiveCompleted();
         this.allCompletedAtTurn = null;
         cleared = true;
       }

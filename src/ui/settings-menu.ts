@@ -112,7 +112,7 @@ export async function openSettingsMenu(
           "on_list_complete: cleared automatically after all tasks are done. " +
           "on_task_complete: each task cleared shortly after it completes. " +
           "oldest: when the task count exceeds 'Max visible tasks', clear the oldest completed tasks first. " +
-          "Completed subtasks are kept while any ancestor remains stored. " +
+          "Completed subtasks are kept while any ancestor remains stored. Automatic cleanup preserves total/done counts. " +
           `Timed clearing modes lag ~${clearDelayTurns} turns.`,
         currentValue: cfg.autoClearCompleted ?? "on_list_complete",
         values: ["never", "on_list_complete", "on_task_complete", "oldest"],

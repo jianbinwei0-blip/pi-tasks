@@ -79,11 +79,18 @@ export interface Task {
   updatedAt: number;
 }
 
+/** Minimal records retained after automatic cleanup, without restoring task rows or usage. */
+export type CompletedTaskRecord = Pick<Task, "id" | "parentTaskId">;
+export type TaskProgress = Pick<Task, "id" | "parentTaskId" | "status" | "blockedBy">;
+
 /** Serialized store format on disk. */
 export interface TaskStoreData {
   nextId: number;
   /** Next direct-child ordinal per parent. Optional for legacy store files. */
   nextSubtaskIds?: Record<string, number>;
+  completedTaskHistory?: CompletedTaskRecord[];
+  /** Prevent replaying legacy history after an explicit clear or deletion. */
+  historyInitialized?: boolean;
   tasks: Task[];
 }
 

@@ -29,6 +29,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
+import { recoverCompletedTaskHistory } from "./task-history.js";
 import {
   formatCacheHitRatio,
   formatCostUsd,
@@ -354,11 +355,16 @@ export default function (pi: ExtensionAPI) {
       store = new TaskStore(path);
       widget.setStore(store);
     }
+    store.initializeCompletedHistory(() =>
+      taskScope === "session" && !piTasks
+        ? recoverCompletedTaskHistory(ctx.sessionManager.getBranch())
+        : []
+    );
     storeUpgraded = true;
   }
 
   /** Restore widget on session start/resume if there's unfinished work.
-   *  On new sessions, auto-clear if all tasks are completed (clean slate).
+   *  On new sessions, auto-clear completed rows while preserving progress history.
    *  On resume, always show tasks (user may want to review).
    *  Only runs once — the first caller wins. */
   function showPersistedTasks(isResume = false) {
@@ -367,13 +373,12 @@ export default function (pi: ExtensionAPI) {
     const tasks = store.list();
     if (tasks.length > 0) {
       if (!isResume && tasks.every(t => t.status === "completed")) {
-        store.clearCompleted();
-        if (taskScope === "session") store.deleteFileIfEmpty();
+        store.archiveCompleted();
       } else {
         autoClear.onTaskListChanged();
-        widget.update();
       }
     }
+    widget.update();
   }
 
   // ── Turn tracking for system-reminder injection ──
@@ -521,9 +526,18 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // session_switch fires on /new (reason: "new") and /resume (reason: "resume").
-  // On /new: reset all session-scoped state so the store switches to the new session file.
-  // On resume: reload persisted tasks from the existing session file.
+  // Current Pi emits session_start on startup, resume, and /reload.
+  pi.on("session_start", async (event, ctx) => {
+    latestCtx = ctx;
+    widget.setUICtx(ctx.ui as UICtx);
+    upgradeStoreIfNeeded(ctx);
+    showPersistedTasks(event.reason !== "new");
+  });
+
+  pi.on("session_shutdown", async () => widget.dispose());
+
+  // Older Pi versions emit session_switch on /new and /resume instead of rebuilding the extension.
+  // Reset session-scoped state so the store switches to the appropriate session file.
   pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
@@ -1210,14 +1224,15 @@ Set up task dependencies:
       const mainMenu = async (): Promise<void> => {
         const tasks = store.list();
         const taskCount = tasks.length;
-        const completedCount = tasks.filter(t => t.status === "completed").length;
+        const progress = store.getProgress();
+        const completedCount = progress.filter(t => t.status === "completed").length;
 
         const choices: string[] = [
           `View all tasks (${taskCount})`,
           "Create task",
         ];
         if (completedCount > 0) choices.push(`Clear completed (${completedCount})`);
-        if (taskCount > 0) choices.push(`Clear all (${taskCount})`);
+        if (progress.length > 0) choices.push(`Clear all (${progress.length})`);
         choices.push("Settings");
 
         const choice = await ui.select("Tasks", choices);

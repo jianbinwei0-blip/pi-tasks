@@ -639,6 +639,7 @@ export class TaskWidget {
     const tasks = this.store.list(sortOrder);
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
+    const singleLine = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ");
 
     const progress = this.store.getProgress();
     if (progress.length === 0) return [];
@@ -668,6 +669,9 @@ export class TaskWidget {
     for (const { task, depth } of visible) {
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
       const indent = "  ".repeat(depth + 1);
+      const subject = singleLine(task.subject);
+      const agentId = task.status === "in_progress" ? task.metadata?.agentId : undefined;
+      const agentLabel = agentId ? ` (agent ${singleLine(agentId.slice(0, 5))})` : "";
 
       let icon: string;
       if (isActive) {
@@ -693,20 +697,16 @@ export class TaskWidget {
 
       let text: string;
       if (isActive) {
-        const form = task.activeForm || task.subject;
-        const agentId = task.metadata?.agentId;
-        const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
+        const form = task.activeForm ? singleLine(task.activeForm) : subject;
         const stats = formatWidgetStats(theme, executionStats.get(task.id), now);
         text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
       } else if (task.status === "completed") {
         const statSuffix = formatWidgetStats(theme, executionStats.get(task.id), now);
-        text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}${statSuffix}`;
+        text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + subject))}${statSuffix}`;
       } else {
-        const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
-          ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
-          : "";
+        const agentSuffix = agentLabel ? theme.fg("dim", agentLabel) : "";
         const stats = formatWidgetStats(theme, executionStats.get(task.id), now);
-        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${stats}`;
+        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${subject}${agentSuffix}${stats}`;
       }
 
       lines.push(truncate(text + suffix));

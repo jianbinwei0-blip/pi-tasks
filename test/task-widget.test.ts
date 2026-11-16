@@ -462,6 +462,37 @@ describe("TaskWidget", () => {
     expect(lines[1]).not.toContain("◼");
   });
 
+  it("refreshes active tasks every 500ms without delaying event-driven updates", () => {
+    store.create("Task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    const requestRender = vi.fn();
+    const entry = ui.state.widgets.get("tasks");
+    entry.content({ terminal: { columns: 200 }, requestRender }, mockTheme());
+
+    vi.advanceTimersByTime(499);
+    expect(requestRender).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(requestRender).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(250);
+    widget.setAgentActive(false);
+    expect(requestRender).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(249);
+    expect(requestRender).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(1);
+    expect(requestRender).toHaveBeenCalledTimes(3);
+
+    widget.dispose();
+    vi.advanceTimersByTime(1000);
+    expect(requestRender).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shows blocked-by info for pending tasks", () => {
     store.create("Blocker", "Desc");
     store.create("Blocked", "Desc");

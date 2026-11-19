@@ -334,7 +334,7 @@ describe("auto-clear: subtask history", () => {
       const child = store.createSubtask(parent.id, "Child", "Desc");
       const grandchild = store.createSubtask(child.id, "Grandchild", "Desc");
       const unrelated = store.create("Unrelated", "Desc");
-      for (const task of [child, grandchild, unrelated]) {
+      for (const task of [grandchild, child, unrelated]) {
         store.update(task.id, { status: "completed" });
         manager.trackCompletion(task.id, 1);
       }

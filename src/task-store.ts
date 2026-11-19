@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { CompletedTaskRecord, Task, TaskProgress, TaskStatus, TaskStoreData } from "./types.js";
+import { type CompletedTaskRecord, isTaskExecutionStats, type Task, type TaskProgress, type TaskStatus, type TaskStoreData } from "./types.js";
 
 const HIERARCHICAL_TASK_ID = /^\d+(?:\.\d+)*$/;
 
@@ -46,6 +46,15 @@ function sortByOldest(a: Task, b: Task): number {
 }
 
 const SORT_FNS = { id: sortById, status: sortByStatus, recent: sortByRecent, oldest: sortByOldest };
+
+/** Reopening invalidates the end time, not the work already recorded. */
+function clearCompletionTiming(task: Task): void {
+  const stats = task.metadata?.executionStats;
+  if (!isTaskExecutionStats(stats) || (stats.completedAt === undefined && stats.durationMs === undefined)) return;
+  const { completedAt, durationMs, ...openStats } = stats;
+  openStats.activeDurationMs ??= Math.max(0, durationMs ?? (completedAt ?? stats.startedAt) - stats.startedAt);
+  task.metadata.executionStats = openStats;
+}
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
@@ -139,14 +148,14 @@ export class TaskStore {
     } catch { /* corrupt file — start fresh */ }
   }
 
-  /** Infer legacy parent links and ensure child counters advance past stored IDs. */
+  /** Repair legacy hierarchy and status, and advance counters past stored IDs. */
   private reconcileSubtaskState(): void {
     for (const task of [...this.tasks.values(), ...this.completedTaskHistory.values()]) {
       const rootOrdinal = Number(task.id.split(".")[0]);
       if (Number.isSafeInteger(rootOrdinal)) this.nextId = Math.max(this.nextId, rootOrdinal + 1);
       const separator = task.id.lastIndexOf(".");
       const inferredParentId = separator > 0 ? task.id.slice(0, separator) : undefined;
-      if (!task.parentTaskId && inferredParentId && this.tasks.has(inferredParentId)) {
+      if (!task.parentTaskId && inferredParentId && (this.tasks.has(inferredParentId) || this.completedTaskHistory.has(inferredParentId))) {
         task.parentTaskId = inferredParentId;
       }
 
@@ -158,6 +167,54 @@ export class TaskStore {
       if (nextId > (this.nextSubtaskIds.get(parentTaskId) ?? 1)) {
         this.nextSubtaskIds.set(parentTaskId, nextId);
       }
+    }
+
+    // Old versions could complete or even archive a parent while its descendants were open.
+    const invalidHistory = new Set<string>();
+    for (const task of this.tasks.values()) {
+      if (task.status === "completed" || !task.parentTaskId) continue;
+      for (const id of this.ancestorIds(task)) {
+        const ancestor = this.tasks.get(id);
+        if (ancestor?.status === "completed") {
+          ancestor.status = "in_progress";
+          clearCompletionTiming(ancestor);
+        }
+        if (this.completedTaskHistory.has(id)) invalidHistory.add(id);
+      }
+    }
+    // Archived records lack enough information to reopen. Drop the false completion count.
+    for (const id of invalidHistory) this.completedTaskHistory.delete(id);
+  }
+
+  private *ancestorIds(task: CompletedTaskRecord): Iterable<string> {
+    const seen = new Set([task.id]);
+    let id = task.parentTaskId;
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      yield id;
+      id = (this.tasks.get(id) ?? this.completedTaskHistory.get(id))?.parentTaskId;
+    }
+  }
+
+  private closedAncestorReason(ancestorIds: Iterable<string>): string | undefined {
+    for (const id of ancestorIds) {
+      const ancestor = this.tasks.get(id);
+      if (ancestor?.status === "completed") return `ancestor #${id} is completed. Reopen it first.`;
+      if (!ancestor && this.completedTaskHistory.has(id)) return `ancestor #${id} is archived. Create a new task instead.`;
+    }
+  }
+
+  private hierarchyStatusError(task: Task, status: TaskStatus): string | undefined {
+    if (status === "completed") {
+      const unfinished = Array.from(this.tasks.values())
+        .filter(child => child.status !== "completed" && child.parentTaskId && [...this.ancestorIds(child)].includes(task.id))
+        .map(child => child.id).sort(compareTaskIds);
+      if (unfinished.length > 0) {
+        return `Cannot complete task #${task.id}: unfinished subtasks ${unfinished.map(id => `#${id}`).join(", ")}.`;
+      }
+    } else {
+      const reason = this.closedAncestorReason(this.ancestorIds(task));
+      if (reason) return `Cannot reopen task #${task.id}: ${reason}`;
     }
   }
 
@@ -214,9 +271,10 @@ export class TaskStore {
     return this.withLock(() => {
       let id: string;
       if (parentTaskId) {
-        if (!this.tasks.has(parentTaskId)) {
-          throw new Error(`Parent task #${parentTaskId} not found`);
-        }
+        const parent = this.tasks.get(parentTaskId);
+        if (!parent) throw new Error(`Parent task #${parentTaskId} not found`);
+        const reason = this.closedAncestorReason([parent.id, ...this.ancestorIds(parent)]);
+        if (reason) throw new Error(`Cannot create a subtask under #${parent.id}: ${reason}`);
         let nextSubtaskId = this.nextSubtaskIds.get(parentTaskId) ?? 1;
         id = `${parentTaskId}.${nextSubtaskId}`;
         while (this.tasks.has(id)) {
@@ -308,7 +366,7 @@ export class TaskStore {
     metadata?: Record<string, any>;
     addBlocks?: string[];
     addBlockedBy?: string[];
-  }): { task: Task | undefined; changedFields: string[]; warnings: string[] } {
+  }): { task: Task | undefined; changedFields: string[]; warnings: string[]; statusError?: string } {
     return this.withLock(() => {
       const task = this.tasks.get(id);
       if (!task) {
@@ -331,7 +389,10 @@ export class TaskStore {
         return { task: undefined, changedFields: ["deleted"], warnings: [] };
       }
 
+      const reopening = task.status === "completed" && fields.status !== undefined && fields.status !== "completed";
       if (fields.status !== undefined) {
+        const statusError = this.hierarchyStatusError(task, fields.status);
+        if (statusError) return { task, changedFields, warnings, statusError };
         task.status = fields.status;
         changedFields.push("status");
       }
@@ -363,6 +424,7 @@ export class TaskStore {
         }
         changedFields.push("metadata");
       }
+      if (reopening) clearCompletionTiming(task);
 
       // Bidirectional dependency edges
       if (fields.addBlocks && fields.addBlocks.length > 0) {

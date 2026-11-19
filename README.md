@@ -121,7 +121,7 @@ In `taskCreationMode: "always"`, the first task created (or existing task moved 
 → Subtask #13.2 created under #13: Add authentication tests
 ```
 
-The next user prompt starts a new top-level task (`#14`); subtask creation does not consume top-level IDs.
+Use the parent for the whole requested outcome, not just the first phase. The next user prompt starts a new top-level task (`#14`) unless it reuses an existing task; subtask creation does not consume top-level IDs.
 
 ### `TaskList`
 
@@ -223,6 +223,8 @@ pending → in_progress → completed
 
 Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — top-level and per-parent subtask IDs never reset while the task store remains intact.
 
+**Complete subtasks before their parent.** A completion request names any unfinished descendants and leaves the task unchanged. Pending (including blocked) and in-progress descendants both count. Finishing the last descendant does not automatically complete the parent; the parent may have work of its own. To add or reopen a subtask, reopen any completed ancestors first (`TaskUpdate` or `/tasks` → Reopen). If an ancestor has already been archived, create a new task instead.
+
 ## Prompt Task Creation Modes
 
 `taskCreationMode` controls whether pi-tasks creates prompt-level tasks itself or leaves task creation entirely to the agent/user. Configure it via pi-extmgr package configuration, `/tasks` → Settings (project), `<cwd>/.pi/tasks-config.json`, or `~/.pi/agent/extensions/pi-tasks.json`.
@@ -251,7 +253,7 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 | `session` **(default)** | `<cwd>/.pi/tasks/tasks-<sessionId>.json` | Per-session file — isolated between sessions, survives resume |
 | `project` | `<cwd>/.pi/tasks/tasks.json` | Shared across all sessions in the project |
 
-On new session start, if all persisted tasks are completed their rows are auto-cleared while preserving progress history. On session resume or `/reload`, retained tasks and progress history are shown immediately. Initialized stores remain on disk even after an explicit clear: their reset marker prevents old session history from being imported again and preserves ID numbering.
+On new session start, if all persisted tasks are completed their rows are auto-cleared while preserving progress history. On session resume or `/reload`, retained tasks and progress history are shown immediately. When loading an older list, a retained parent marked completed despite unfinished descendants is reopened without changing the descendants or discarding recorded usage. An invalid archived completion count is dropped if there is no parent row to reopen. Initialized stores remain on disk even after an explicit clear: their reset marker prevents old session history from being imported again and preserves ID numbering.
 
 ### Auto-clear completed tasks
 
@@ -340,7 +342,7 @@ Tasks
 └─ Settings
 ```
 
-- **View all tasks** — select a task to see details and take actions (start, complete, delete)
+- **View all tasks** — select a task to see details and take actions (start, complete, reopen, delete)
 - **Create task** — input prompts for subject and description
 - **Clear completed** — remove all completed tasks
 - **Clear all** — remove all tasks regardless of status
@@ -391,8 +393,8 @@ The returned `id` is stored in an in-memory `agentTaskMap` (agentId → taskId) 
 
 | Event | Payload | Action |
 |-------|---------|--------|
-| `subagents:completed` | `{ id, result? }` | Mark task `completed`, trigger auto-cascade if enabled |
-| `subagents:failed` | `{ id, error?, status }` | Revert task to `pending`, store error in metadata |
+| `subagents:completed` | `{ id, result? }` | Store the result and stop the run clock. Mark the task `completed` and cascade only if no descendants are unfinished. |
+| `subagents:failed` | `{ id, error?, status }` | Revert to `pending` and store errors; an intentional stop retains any partial result and only completes the task if all descendants are finished. |
 
 ### Standalone Mode
 

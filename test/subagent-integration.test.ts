@@ -545,6 +545,87 @@ describe("Auto-cascade", () => {
 });
 
 
+describe("Parent task lifecycle through the extension", () => {
+  let store: TaskStore;
+  let mock: ReturnType<typeof mockPi>;
+  let rpc: ReturnType<typeof installSubagentsMock>;
+  let ctx: ReturnType<typeof mockCtx> & { hasUI: true };
+
+  beforeEach(async () => {
+    process.env.PI_TASKS = path.join(testAgentDir!, "hierarchy.json");
+    const configs = path.join(testAgentDir!, "extensions");
+    fs.mkdirSync(configs, { recursive: true });
+    fs.writeFileSync(path.join(configs, "pi-tasks.json"), JSON.stringify({ autoCascade: true }));
+    store = new TaskStore(process.env.PI_TASKS);
+    store.create("Parent", "Desc", undefined, { agentType: "general-purpose" });
+    store.createSubtask("1", "Unfinished child", "Desc");
+    mock = mockPi();
+    rpc = installSubagentsMock(mock.pi);
+    initExtension(mock.pi as any);
+    ctx = { ...mockCtx(), hasUI: true };
+    await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
+  });
+
+  afterEach(async () => {
+    await mock.fireLifecycle("session_shutdown");
+    rpc.unsub();
+  });
+
+  it("warns in /tasks without changing status, and lets the user reopen a completed parent", async () => {
+    async function chooseAction(id: string, action: string) {
+      const select = vi.fn()
+        .mockResolvedValueOnce("View all tasks (2)")
+        .mockImplementationOnce(async (_title, choices: string[]) => choices.find(choice => choice.includes(`#${id} [`)))
+        .mockImplementationOnce(async (_title, choices: string[]) => {
+          expect(choices).toContain(action);
+          return action;
+        });
+      await mock.commands.get("tasks").handler("", { ...ctx, ui: { ...ctx.ui, select } });
+    }
+
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    await chooseAction("1", "✓ Complete");
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Cannot complete task #1: unfinished subtasks #1.1.", "warning");
+    expect(store.get("1")?.status).toBe("in_progress");
+
+    store.update("1.1", { status: "completed" });
+    await chooseAction("1", "✓ Complete");
+    await chooseAction("1.1", "▸ Reopen (in_progress)");
+    expect(store.get("1.1")?.status).toBe("completed");
+    await chooseAction("1", "▸ Reopen (in_progress)");
+    await chooseAction("1.1", "▸ Reopen (in_progress)");
+    expect(store.list().map(task => task.status)).toEqual(["in_progress", "in_progress"]);
+  });
+
+  it.each(["completed", "stopped"])("leaves the parent open when its subagent %s, without cascading", async outcome => {
+    const dependent = store.create("Dependent", "Desc", undefined, { agentType: "general-purpose" });
+    store.update(dependent.id, { addBlockedBy: ["1"] });
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+
+    mock.emitEvent(outcome === "completed" ? "subagents:completed" : "subagents:failed", {
+      id: "agent-1", result: "Saved agent output", status: outcome,
+    });
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith("Cannot complete task #1: unfinished subtasks #1.1.", "warning");
+    expect(store.get("1")).toMatchObject({ status: "in_progress", metadata: { result: "Saved agent output" } });
+    expect(store.get("1")?.metadata.agentId).toBeUndefined();
+    expect(store.get("1.1")?.status).toBe("pending");
+    expect(store.get(dependent.id)).toMatchObject({ status: "pending", blockedBy: ["1"] });
+    expect(rpc.spawned).toHaveLength(1);
+  });
+
+  it("stops an agent by ID without completing a parent that still has a subtask", async () => {
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+    const stopped = await mock.executeTool("TaskStop", { task_id: "agent-1" });
+
+    expect(rpc.stopped).toEqual(["agent-1"]);
+    expect(stopped.content[0].text).toContain("Task #1 stopped successfully. Cannot complete task #1: unfinished subtasks #1.1.");
+    expect(store.get("1")).toMatchObject({ status: "in_progress" });
+    expect(store.get("1")?.metadata.agentId).toBeUndefined();
+    expect(store.get("1.1")?.status).toBe("pending");
+  });
+});
+
 describe("Standalone operation (no subagents extension)", () => {
   let mock: ReturnType<typeof mockPi>;
 
@@ -1514,6 +1595,36 @@ describe("Task creation mode", () => {
 
     expect(nextParent.content[0].text).toContain("Task #2 created");
     expect(nextChild.content[0].text).toContain("Subtask #2.1 created under #2");
+  });
+
+  it("reports early parent completion as an error without closing the prompt or its children", async () => {
+    await writeConfig({ taskCreationMode: "always" });
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    await mock.fireLifecycle("before_agent_start", { prompt: "Restore and verify local data" }, mockCtx());
+    try {
+      await mock.executeTool("TaskCreate", { subject: "Restore and verify local data", description: "Desc" });
+      await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+      await mock.executeTool("TaskCreate", { subject: "Fix data flow", description: "Desc" });
+      await mock.executeTool("TaskUpdate", { taskId: "1.1", status: "in_progress" });
+      await mock.executeTool("TaskCreate", { subject: "Verify data flow", description: "Desc" });
+      await mock.executeTool("TaskUpdate", { taskId: "1.2", addBlockedBy: ["1.1"] });
+
+      await expect(mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" }))
+        .rejects.toThrow("Cannot complete task #1: unfinished subtasks #1.1, #1.2.");
+      const { content } = await mock.executeTool("TaskList", {});
+      expect(content[0].text).toContain("#1 [in_progress] Restore and verify local data");
+      expect(content[0].text).toContain("#1.1 [in_progress] Fix data flow");
+      expect(content[0].text).toContain("#1.2 [pending] Verify data flow [blocked by #1.1]");
+
+      for (const taskId of ["1.1", "1.2", "1"]) {
+        await mock.executeTool("TaskUpdate", { taskId, status: "completed" });
+      }
+      await expect(mock.executeTool("TaskCreate", { subject: "Late step", description: "Desc" }))
+        .rejects.toThrow(/ancestor #1 is completed/);
+    } finally {
+      await mock.fireLifecycle("session_shutdown");
+    }
   });
 
   it("always mode uses a reused in-progress task as the prompt parent", async () => {

@@ -51,11 +51,12 @@ describe("inclusive task execution statistics", () => {
       startedAt: 7000, completedAt: 12_000, durationMs: 5000,
       workTiming: { work: [[7000, 9000]], inputWait: [[9000, 12_000]] },
     } });
-    store.update("1", { status: "completed" });
     store.createSubtask("1", "Child", "", undefined, { executionStats: {
       startedAt: 6000, completedAt: 13_000,
       workTiming: { work: [[6000, 8000], [9500, 13_000]] },
     } });
+    store.update("1.1", { status: "completed" });
+    store.update("1", { status: "completed" });
     const reports = aggregateTaskExecutionStats(store.list(), undefined, 20_000);
     expect(reports.get("1")).toMatchObject({ durationMs: 5000, workDurationMs: 4500, inputWaitDurationMs: 500 });
     expect(reports.get("1.1")?.workDurationMs).toBe(5500);

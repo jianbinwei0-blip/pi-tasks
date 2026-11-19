@@ -730,10 +730,10 @@ describe("TaskWidget", () => {
     store.create("Parent", "Desc");
     store.createSubtask("2", "Child", "Desc");
     store.createSubtask("2.1", "Grandchild", "Desc");
-    const completedIds = config.sortOrder === "status" && config.hiddenAt === "bottom"
-      ? ["2.1.1"]
-      : ["1", "2", "2.1"];
-    for (const id of completedIds) store.update(id, { status: "completed" });
+    const completedId = config.sortOrder === "status" && config.hiddenAt === "bottom"
+      ? "2.1.1"
+      : "1";
+    store.update(completedId, { status: "completed" });
     widget.update();
 
     const lines = renderWidget(ui.state);
@@ -1117,7 +1117,6 @@ describe("TaskWidget", () => {
         cacheReadTokens: 600, cacheWriteTokens: 200, totalTokens: 1100, costUsd: 2,
       },
     });
-    store.update("1.1", { status: "completed" });
     store.createSubtask("1.1", "Grandchild", "Desc", undefined, {
       executionStats: {
         startedAt, completedAt: startedAt + 30_000, durationMs: 30_000,
@@ -1126,6 +1125,7 @@ describe("TaskWidget", () => {
       },
     });
     store.update("1.1.1", { status: "completed" });
+    store.update("1.1", { status: "completed" });
     widget.update();
 
     const lines = renderWidget(ui.state);

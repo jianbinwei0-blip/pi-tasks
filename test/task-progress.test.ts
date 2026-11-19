@@ -20,8 +20,8 @@ describe("Persistent task progress", () => {
     const second = new TaskStore(file);
     first.create("Finished", "Desc");
     first.createSubtask("1", "Finished step", "Desc");
-    second.update("1", { status: "completed" });
     second.update("1.1", { status: "completed" });
+    second.update("1", { status: "completed" });
     expect(first.archiveCompleted(["1", "1.1"])).toBe(2);
     expect(first.archiveCompleted(["1", "1.1"])).toBe(0);
     second.create("Next", "Desc");

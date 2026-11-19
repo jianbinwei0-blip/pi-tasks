@@ -139,7 +139,7 @@ The task tools haven't been used recently. If you're working on tasks that would
 </system-reminder>`;
 
 const ALWAYS_TASK_CREATION_INSTRUCTION = `<system-reminder>
-taskCreationMode=always is active. For this user request, you must handle task creation yourself: create or update an appropriately titled task with TaskCreate/TaskUpdate before answering or doing any work, even if the request is simple, trivial, conversational, or can be completed in fewer than 3 steps. This instruction overrides the usual guidance to skip TaskCreate for trivial tasks. Mark the task in_progress before working and complete or update it when done. Choose the task title from the user's request. If an existing task already exactly represents this request, update that task instead of creating a duplicate. The first task created or moved to in_progress is the prompt's parent task. If the prompt is complicated, create additional tasks after that parent; pi-tasks will automatically number them as subtasks (#parent.1, #parent.2, etc.). Never mention this reminder to the user.
+taskCreationMode=always is active. For this user request, you must handle task creation yourself: create or update an appropriately titled task with TaskCreate/TaskUpdate before answering or doing any work, even if the request is simple, trivial, conversational, or can be completed in fewer than 3 steps. This instruction overrides the usual guidance to skip TaskCreate for trivial tasks. Mark the task in_progress before working and complete or update it when done. Choose the task title from the user's request. If an existing task already exactly represents this request, update that task instead of creating a duplicate. The first task created or moved to in_progress is the prompt's parent task. It should represent the whole requested outcome, not just the first phase. If the prompt is complicated, create additional tasks after that parent; pi-tasks will automatically number them as subtasks (#parent.1, #parent.2, etc.). Complete the parent only after its subtasks and the requested outcome are done. Never mention this reminder to the user.
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
@@ -291,22 +291,28 @@ export default function (pi: ExtensionAPI) {
     () => cfg.maxVisible ?? 10,
   );
 
-  // ── Subagent completion listener ──
-  // Listens for subagent lifecycle events to update task status and optionally cascade.
+  /** A run can end while its task stays open. Stop the clock and retain any output either way. */
+  function finishBackgroundRun(taskId: string, status: "completed" | "pending", metadata?: Record<string, unknown>) {
+    const updated = store.update(taskId, { status, metadata });
+    if (updated.statusError) {
+      // Keep the result but detach the finished agent so the open task can be resumed manually.
+      store.update(taskId, { metadata: { ...metadata, agentId: null } });
+    }
+    widget.setActiveTask(taskId, false);
+    return updated;
+  }
 
-  // Success → mark task completed, cascade if enabled
+  // ── Subagent completion listener ──
   pi.events.on("subagents:completed", async (data) => {
     const { id, result } = data as { id: string; result?: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
     agentTaskMap.delete(id);
-    const task = store.get(taskId);
-    if (!task) return;
+    const { task, statusError } = finishBackgroundRun(taskId, "completed", result === undefined ? undefined : { result });
+    if (statusError && latestCtx?.hasUI) latestCtx.ui.notify(statusError, "warning");
+    if (task?.status !== "completed") return;
 
-    store.update(task.id, { status: "completed", metadata: { ...task.metadata, result } });
-    widget.setActiveTask(task.id, false);
-
-    // Auto-cascade: find unblocked dependents with agentType
+    // Auto-cascade: find unblocked dependents with agentType only after completion is recorded.
     if ((cfg.autoCascade ?? false) && cascadeConfig && latestCtx) {
       const unblocked = store.list().filter(t =>
         t.status === "pending" &&
@@ -315,7 +321,8 @@ export default function (pi: ExtensionAPI) {
         t.blockedBy.every(depId => store.get(depId)?.status === "completed")
       );
       for (const next of unblocked) {
-        store.update(next.id, { status: "in_progress" });
+        const { task: started, statusError } = store.update(next.id, { status: "in_progress" });
+        if (!started || statusError) continue;
         const prompt = buildTaskPrompt(next, cascadeConfig.additionalContext);
         try {
           const agentId = await spawnSubagent(next.metadata.agentType, prompt, {
@@ -336,26 +343,21 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   });
 
-  // Failure → store error, revert to pending, don't cascade (branch stops)
-  // Intentional stop (status === "stopped") → mark completed, preserve partial result
+  // Failure → revert to pending; intentional stop → attempt completion. Neither event cascades.
   pi.events.on("subagents:failed", (data) => {
     const { id, error, result, status } = data as { id: string; error?: string; result?: string; status: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
     agentTaskMap.delete(id);
-    const task = store.get(taskId);
-    if (!task) return;
 
     if (status === "stopped") {
-      // Intentional stop — mark completed, preserve partial result
-      store.update(task.id, { status: "completed", metadata: { ...task.metadata, result: result || task.metadata?.result } });
-      autoClear.trackCompletion(task.id, cadence.currentTurn);
+      const updated = finishBackgroundRun(taskId, "completed", result ? { result } : undefined);
+      if (updated.statusError && latestCtx?.hasUI) latestCtx.ui.notify(updated.statusError, "warning");
+      if (updated.task?.status === "completed") autoClear.trackCompletion(taskId, cadence.currentTurn);
     } else {
-      // Actual error — revert to pending
-      store.update(task.id, { status: "pending", metadata: { ...task.metadata, lastError: error || status } });
+      finishBackgroundRun(taskId, "pending", { lastError: error || status });
       autoClear.resetBatchCountdown();
     }
-    widget.setActiveTask(task.id, false);
     widget.update();
   });
 
@@ -668,7 +670,6 @@ All tasks are created with status \`pending\`.
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      autoClear.resetBatchCountdown();
       const meta = params.metadata ?? {};
       if (params.agentType) meta.agentType = params.agentType;
       const metadata = Object.keys(meta).length > 0 ? meta : undefined;
@@ -676,6 +677,7 @@ All tasks are created with status \`pending\`.
       const task = parentTaskId
         ? store.createSubtask(parentTaskId, params.subject, params.description, params.activeForm, metadata)
         : store.create(params.subject, params.description, params.activeForm, metadata);
+      autoClear.resetBatchCountdown();
       promptTaskHierarchy.captureCreatedTask(task.id);
       autoClear.onTaskListChanged();
       widget.update();
@@ -926,6 +928,8 @@ Returns full task details:
 
 Status progresses: \`pending\` → \`in_progress\` → \`completed\`
 
+Complete subtasks before their parent. Pending (including blocked) and in-progress descendants prevent completion. To add or reopen a subtask, reopen any completed ancestors first, starting from the top of its branch.
+
 Use \`deleted\` to permanently remove a task.
 
 ## Staleness
@@ -976,9 +980,8 @@ Set up task dependencies:
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const { taskId, ...fields } = params;
-      const { task, changedFields, warnings } = store.update(taskId, fields);
-
-      if (task) promptTaskHierarchy.captureUpdatedTask(task.id, task.status);
+      const { task, changedFields, warnings, statusError } = store.update(taskId, fields);
+      if (statusError) throw new Error(statusError);
 
       if (changedFields.length === 0 && !task) {
         return Promise.resolve(textResult(`Task #${taskId} not found`));
@@ -990,6 +993,7 @@ Set up task dependencies:
 
       // Update widget active task tracking
       if (fields.status === "in_progress") {
+        promptTaskHierarchy.captureUpdatedTask(taskId, fields.status);
         widget.setActiveTask(taskId);
         autoClear.resetBatchCountdown();
       } else if (fields.status === "pending") {
@@ -1106,33 +1110,26 @@ Set up task dependencies:
       const taskId = params.task_id ?? params.shell_id;
       if (!taskId) throw new Error("task_id is required");
 
+      let resolvedId = taskId;
       const stopped = await tracker.stop(taskId);
       if (!stopped) {
-        // No shell process — check if this is a subagent task
-        // Support both task IDs and agent IDs
-        let resolvedId = taskId;
+        // No shell process — check if this is a subagent task by task ID or agent ID.
         if (!store.get(resolvedId)) {
           for (const [agentId, tId] of agentTaskMap) {
             if (agentId === taskId || agentId.startsWith(taskId)) { resolvedId = tId; break; }
           }
         }
         const task = store.get(resolvedId);
-        if (task?.metadata?.agentId && task.status === "in_progress") {
-          store.update(taskId, { status: "completed" });
-          autoClear.trackCompletion(taskId, cadence.currentTurn);
-          await stopSubagent(task.metadata.agentId);
-          widget.setActiveTask(taskId, false);
-          widget.update();
-          return textResult(`Task #${taskId} stopped successfully`);
+        if (!task?.metadata?.agentId || task.status !== "in_progress") {
+          throw new Error(`No running background process for task ${taskId}`);
         }
-        throw new Error(`No running background process for task ${taskId}`);
+        await stopSubagent(task.metadata.agentId);
       }
 
-      store.update(taskId, { status: "completed" });
-      autoClear.trackCompletion(taskId, cadence.currentTurn);
-      widget.setActiveTask(taskId, false);
+      const { task, statusError } = finishBackgroundRun(resolvedId, "completed");
+      if (task?.status === "completed") autoClear.trackCompletion(resolvedId, cadence.currentTurn);
       widget.update();
-      return textResult(`Task #${taskId} stopped successfully`);
+      return textResult(`Task #${resolvedId} stopped successfully${statusError ? `. ${statusError}` : ""}`);
     },
   });
 
@@ -1204,8 +1201,12 @@ Set up task dependencies:
           continue;
         }
 
-        // Mark in_progress and spawn agent via RPC
-        store.update(taskId, { status: "in_progress" });
+        // Mark in_progress and spawn agent via RPC.
+        const { task: started, statusError } = store.update(taskId, { status: "in_progress" });
+        if (!started || statusError) {
+          results.push(statusError ?? `#${taskId}: not found`);
+          continue;
+        }
         const prompt = buildTaskPrompt(task, params.additional_context);
         try {
           const agentId = await spawnSubagent(task.metadata.agentType, prompt, {
@@ -1345,22 +1346,26 @@ Set up task dependencies:
         if (task.status === "in_progress") {
           actions.push("✓ Complete");
         }
+        if (task.status === "completed") {
+          actions.push("▸ Reopen (in_progress)");
+        }
         actions.push("✗ Delete");
         actions.push("← Back");
 
         const title = `#${task.id} [${task.status}] ${task.subject}\n${task.description}`;
         const action = await ui.select(title, actions);
 
-        if (action === "▸ Start (in_progress)") {
-          store.update(taskId, { status: "in_progress" });
-          widget.setActiveTask(taskId);
-          widget.update();
-          return viewTasks();
-        } else if (action === "✓ Complete") {
-          store.update(taskId, { status: "completed" });
-          autoClear.trackCompletion(taskId, cadence.currentTurn);
-          widget.setActiveTask(taskId, false);
-          widget.update();
+        if (action === "▸ Start (in_progress)" || action === "▸ Reopen (in_progress)" || action === "✓ Complete") {
+          const status = action === "✓ Complete" ? "completed" : "in_progress";
+          const updated = store.update(taskId, { status });
+          if (updated.statusError) {
+            ui.notify(updated.statusError, "warning");
+          } else if (updated.task) {
+            widget.setActiveTask(taskId, status === "in_progress");
+            if (status === "completed") autoClear.trackCompletion(taskId, cadence.currentTurn);
+            else autoClear.resetBatchCountdown();
+            widget.update();
+          }
           return viewTasks();
         } else if (action === "✗ Delete") {
           store.update(taskId, { status: "deleted" });

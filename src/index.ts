@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, VERSION } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { AutoClearManager } from "./auto-clear.js";
 import { ProcessTracker } from "./process-tracker.js";
@@ -36,6 +36,7 @@ import {
   formatOutputTokenRate,
   formatTokenCount,
   formatTotalTokens,
+  type TaskExecutionReport,
 } from "./task-stats.js";
 import { compareTaskIds, TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
@@ -65,6 +66,21 @@ function formatDuration(ms: number): string {
   const hr = Math.floor(min / 60);
   const remMin = min % 60;
   return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
+}
+
+/** Pi 0.84.4 added blocking UI-prompt events, after adding agent_settled in 0.80.4. */
+function supportsWorkTiming(version: string): boolean {
+  const [major, minor, patch] = version.split(".").map(part => Number.parseInt(part, 10));
+  return major >= 1 || (major === 0 && (minor > 84 || (minor === 84 && patch >= 4)));
+}
+
+function formatWorkTimingParts(stats: TaskExecutionReport): string[] {
+  const parts: string[] = [];
+  if (stats.workDurationMs !== undefined) parts.push(`work ${formatDuration(stats.workDurationMs)}`);
+  if (stats.inputWaitDurationMs && stats.inputWaitDurationMs > 0) {
+    parts.push(`input wait ${formatDuration(stats.inputWaitDurationMs)}`);
+  }
+  return parts;
 }
 
 function extractUsageCost(usage: any): number {
@@ -151,7 +167,9 @@ export default function (pi: ExtensionAPI) {
   let store = new TaskStore(resolveStorePath());
   const promptTaskHierarchy = new PromptTaskHierarchy();
   const tracker = new ProcessTracker();
-  const widget = new TaskWidget(store, cfg);
+  const measureWorkTime = supportsWorkTiming(VERSION);
+  const widget = new TaskWidget(store, cfg, measureWorkTime);
+  let browsingTasks = false;
 
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
@@ -430,6 +448,22 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     widget.setAgentActive(false);
   });
+
+  if (measureWorkTime) {
+    // The package still supports and type-checks with older Pi peer dependencies.
+    const workEvents = pi as ExtensionAPI & {
+      on(
+        event: "agent_settled" | "ui_prompt_start" | "ui_prompt_end",
+        handler: (event: unknown, ctx: ExtensionContext) => void,
+      ): void;
+    };
+    workEvents.on("agent_settled", () => widget.setAgentSettled());
+    workEvents.on("ui_prompt_start", (_event, ctx) => {
+      // A command/settings dialog outside task work isn't a request for task input.
+      if (!browsingTasks && !ctx.isIdle()) widget.setWaitingForInput(true);
+    });
+    workEvents.on("ui_prompt_end", () => widget.setWaitingForInput(false));
+  }
 
   // Feed per-turn token counts and model cost from assistant messages into the widget.
   pi.on("turn_end", async (event) => {
@@ -813,12 +847,14 @@ Returns full task details:
           `started ${formatClockTime(completedStats.startedAt)}`,
           `ended ${formatClockTime(completedStats.completedAt ?? 0)}`,
           formatDuration(completedStats.durationMs ?? 0),
+          ...formatWorkTimingParts(completedStats),
           ...formatExecutionUsageParts(completedStats),
         ];
         lines.push(`Execution stats: ${statParts.join(" · ")}`);
       } else if (executionStats) {
         const statParts = [
           `started ${formatClockTime(executionStats.startedAt)}`,
+          ...formatWorkTimingParts(executionStats),
           ...formatExecutionUsageParts(executionStats),
         ];
         lines.push(`Execution stats: ${statParts.join(" · ")}`);
@@ -1353,7 +1389,12 @@ Set up task dependencies:
         return mainMenu();
       };
 
-      await mainMenu();
+      browsingTasks = true;
+      try {
+        await mainMenu();
+      } finally {
+        browsingTasks = false;
+      }
     },
   });
 }

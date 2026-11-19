@@ -4,6 +4,10 @@
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
 
+export type TaskWorkPhase = "work" | "inputWait";
+export type TaskWorkInterval = readonly [startMs: number, endMs: number];
+export type TaskWorkTiming = Readonly<Partial<Record<TaskWorkPhase, readonly TaskWorkInterval[]>>>;
+
 /** Stored counters are task-local; inclusive reports are derived, never stored here. */
 export interface TaskExecutionStats {
   /** New counters allocate shared work once; absent on legacy, potentially overlapping records. */
@@ -16,6 +20,8 @@ export interface TaskExecutionStats {
   durationMs?: number;
   /** Allocated active agent time, excluding user waits and time attributed to other tasks. */
   activeDurationMs?: number;
+  /** Measured wall-clock spans, independent of the token-rate denominator. Omitted when unknown. */
+  workTiming?: TaskWorkTiming;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -38,6 +44,18 @@ export function isTaskExecutionStats(value: unknown): value is TaskExecutionStat
   if (stats.usageAttribution !== undefined && stats.usageAttribution !== "exclusive") return false;
   if (stats.legacyUsageOverlap !== undefined && typeof stats.legacyUsageOverlap !== "boolean") return false;
   if (typeof stats.startedAt !== "number" || !Number.isFinite(stats.startedAt)) return false;
+  const timing = stats.workTiming;
+  if (timing !== undefined) {
+    if (!timing || typeof timing !== "object" || Array.isArray(timing)) return false;
+    for (const phase of ["work", "inputWait"] as const) {
+      const intervals = (timing as Record<string, unknown>)[phase];
+      if (intervals === undefined) continue;
+      if (!Array.isArray(intervals) || intervals.some(interval => (
+        !Array.isArray(interval) || interval.length !== 2 ||
+        !Number.isFinite(interval[0]) || !Number.isFinite(interval[1]) || interval[0] > interval[1]
+      ))) return false;
+    }
+  }
   for (const key of [
     "completedAt",
     "durationMs",

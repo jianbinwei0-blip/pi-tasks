@@ -6,12 +6,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 
 let testAgentDir: string | undefined;
+const piHost = vi.hoisted(() => ({ version: "0.78.0" }));
+vi.mock(import("@earendil-works/pi-coding-agent"), async importOriginal => ({
+  ...await importOriginal(),
+  get VERSION() { return piHost.version; },
+}));
 
 // Force in-memory task store for all integration tests — prevents file-backed
 // store from loading stale tasks across test instances. Also isolate the pi
@@ -26,6 +32,7 @@ afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
   if (testAgentDir) fs.rmSync(testAgentDir, { recursive: true, force: true });
   testAgentDir = undefined;
+  piHost.version = "0.78.0";
 });
 
 // ---- Mock pi ----
@@ -934,6 +941,76 @@ describe("Hierarchical execution reports", () => {
     vi.advanceTimersByTime(60_000);
     const detail = (await mock.executeTool("TaskGet", { taskId: "1" })).content[0].text;
     expect(detail).toContain("↑ 30 · ↓ 300 · 330 tok · 10.0 tok/s · $3.00");
+  });
+});
+
+describe("Work clock lifecycle", () => {
+  it.each(["0.84.4", "1.5.2"])("keeps wall work across retries and freezes it during waits on Pi %s", async version => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 3, 13, 14, 2, 10));
+    piHost.version = version;
+    const mock = mockPi();
+    let idle = false;
+    const ctx = { ...mockCtx(), isIdle: () => idle };
+    const fire = (name: string) => mock.fireLifecycle(name, {}, ctx);
+    initExtension(mock.pi as any);
+    try {
+      await fire("before_agent_start");
+      await fire("agent_start");
+      await mock.executeTool("TaskCreate", { subject: "Verify export tests", description: "Desc", activeForm: "Verifying export tests" });
+      await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+      const factory = ctx.ui.setWidget.mock.calls.find(([, content]) => typeof content === "function")?.[1];
+      const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text, strikethrough: (text: string) => text };
+      const row = (columns = 120) => factory({ terminal: { columns }, requestRender() {} }, theme).render()[1];
+
+      vi.advanceTimersByTime(4_000);
+      await fire("agent_end"); // A low-level run ends before an automatic continuation.
+      vi.advanceTimersByTime(1_000);
+      expect(row()).toContain("Verifying export tests…");
+      expect(row()).toContain("Δ0:05 ⚙︎ 0:05");
+      await fire("agent_start");
+      vi.advanceTimersByTime(5_000);
+      await fire("agent_end");
+      idle = true;
+      await fire("agent_settled");
+      await fire("ui_prompt_start"); // An unrelated dialog while Pi is idle.
+      vi.advanceTimersByTime(30_000);
+      expect(row()).toContain("◼ #1 Verify export tests (14:02:10 Δ0:40 ⚙︎ 0:10)");
+      expect(row()).not.toContain("Waiting for input");
+      await fire("ui_prompt_end");
+
+      idle = false;
+      await fire("agent_start");
+      const select = async () => {
+        await fire("ui_prompt_start"); // /tasks browsing is not blocking the agent.
+        vi.advanceTimersByTime(2_000);
+        expect(row()).not.toContain("Waiting for input");
+        await fire("ui_prompt_end");
+        return undefined;
+      };
+      await mock.commands.get("tasks").handler("", { ...ctx, ui: { ...ctx.ui, select } });
+      vi.advanceTimersByTime(8_000);
+      await fire("ui_prompt_start");
+      vi.advanceTimersByTime(20_000);
+      expect(row()).toContain("◼ #1 Verify export tests › Waiting for input (14:02:10 Δ1:10 ⚙︎ 0:20)");
+      expect(visibleWidth("⚙︎")).toBe(1);
+      expect(row(80)).toContain("⚙︎ 0:20");
+      expect(visibleWidth(row(64))).toBeLessThanOrEqual(64);
+      await fire("ui_prompt_end");
+      vi.advanceTimersByTime(10_000);
+      expect(row()).toContain("Verifying export tests…");
+      expect(row()).not.toContain("Waiting for input");
+      await mock.fireLifecycle("turn_end", {
+        message: { role: "assistant", usage: { input: 50, output: 245, totalTokens: 295 } },
+      }, ctx);
+      await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+      expect(row()).toContain("14:02:10 → 14:03:30 Δ1:20 ⚙︎ 0:30 · ↑50 ↓245 Σ295 · 5.0 t/s");
+      const detail = (await mock.executeTool("TaskGet", { taskId: "1" })).content[0].text;
+      expect(detail).toContain("work 30s · input wait 20s");
+    } finally {
+      await fire("session_shutdown");
+      vi.useRealTimers();
+    }
   });
 });
 

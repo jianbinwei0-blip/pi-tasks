@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Status-sorted top hiding no longer hides unfinished work** — when `sortOrder` is `status` and `hiddenAt` is `top`, the widget now collapses completed tasks only. If unfinished tasks exceed `maxVisible`, they all remain visible.
 
 ### Added
+- **Measured task work time** — on Pi 0.84.4 or newer, widget rows keep their start/end clocks and `Δelapsed`, then show `⚙︎ work`. A blocking dialog shows `Waiting for input` and pauses work without stopping elapsed time. `TaskGet` includes measured work and input wait; parent work counts overlaps once, independently of token throughput.
 - **Per-task cache hit ratio** — task execution stats now persist cache-read/cache-write usage and show the task-wide cache hit ratio in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker using Pi's cache-read / prompt-token formula.
 - **Per-task total token count** — task execution stats now persist Pi's provider-reported total (input + output + cache-read + cache-write) and show it in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker. Component-aware records sum all token categories when no total is reported; legacy stats fall back to input + output.
 - **Per-task output-token rate** — task execution stats now show average output tokens per second (`tok/s`) in the persistent widget, `TaskList`, `TaskGet`, and `/tasks` picker once token usage and a positive active duration are available.

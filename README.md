@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with hierarchy-aware status summaries, `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and per-task model cost
+- **Persistent widget** — live task list above the editor with hierarchy-aware status summaries, `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed and measured work time, input/output and total token counts, cache hit ratio, active-time output-token rate, and per-task model cost
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt task creation modes** — choose model-discretionary task creation, manual-only task tracking, or required model-owned task creation for every user prompt
 - **Prompt-scoped subtasks** — in `always` mode, extra tasks created for a complex prompt are nested under its prompt task as `#13.1`, `#13.2`, and so on instead of consuming `#14`, `#15`, …
@@ -50,8 +50,8 @@ The extension renders a persistent widget above the editor:
 
 ```
 ● 1 active task · 4 subtasks (1 running, 3 blocked)
-  ✳ #1 Building the time machine… (13:48:35 Δ2:49 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 20.9 t/s · $1.88)
-    ✳ #1.1 Acquiring plutonium… (13:50:27 Δ1:03 · ↑4.1k ↓1.2k Σ87.6k ⨀94.8% · 19.0 t/s · $0.03)
+  ✳ #1 Building the time machine… (13:48:35 Δ2:55 ⚙︎ 2:45 · ↑23.4k ↓3.5k Σ3.3M ⨀99.3% · 20.9 t/s · $1.88)
+    ✳ #1.1 Acquiring plutonium… (13:50:27 Δ1:03 ⚙︎ 1:03 · ↑4.1k ↓1.2k Σ87.6k ⨀94.8% · 19.0 t/s · $0.03)
     ◻ #1.2 Design the flux capacitor › blocked by #1.1
     ◻ #1.3 Install flux capacitor in DeLorean › blocked by #1.1
     ◻ #1.4 Test time travel at 88 mph › blocked by #1.2, #1.3
@@ -60,7 +60,7 @@ The extension renders a persistent widget above the editor:
 | Icon | Meaning |
 |------|---------|
 | `✔` | Completed (strikethrough + dim) |
-| `◼` | In-progress (not actively executing) |
+| `◼` | In progress but not currently executing; `Waiting for input` appears only for a blocking prompt |
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, input/output and total token counts, cache hit ratio, active-time output-token rate, and model cost when available) |
 
@@ -68,13 +68,15 @@ The header summarizes all retained tasks **plus completed-task history**, includ
 
 Rows stay grouped beneath their parent in every sort mode, with two more spaces of indentation per nesting level. The configured sort order applies to top-level tasks and siblings within each branch. Display limits select rows by the configured sort priority before grouping; every stored ancestor of a selected row is also shown, even if this exceeds `maxVisible`. The `… and N more` indicator counts only rows actually hidden. If a parent has been deleted, its remaining branch is displayed at the top level rather than beneath an unrelated task.
 
-Widget stats use 24-hour clock times and compact stopwatch durations: completed tasks show `start → end Δduration`, while running tasks show `start Δelapsed`. The token group keeps `↑` input, `↓` output, `Σ` total, and `⨀` task-wide cache hit ratio together; `t/s` is average output-token throughput during active agent time. Every decimal token statistic uses one digit after the decimal point, while whole compact counts omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`). Model costs are rounded to cents and always use two decimal places.
+Widget stats use 24-hour clock times and compact stopwatch durations. Open tasks show `start Δelapsed ⚙︎ work`; completed tasks keep the end time (`14:02:10 → 14:03:30 Δ1:20 ⚙︎ 0:30`). The token group keeps `↑` input, `↓` output, `Σ` total, and `⨀` task-wide cache hit ratio together; `t/s` is average output-token throughput during active agent time. Every decimal token statistic uses one digit after the decimal point, while whole compact counts omit `.0` (for example, `↑392.2k ↓120k Σ144.0M`). Model costs are rounded to cents and always use two decimal places.
+
+The one-column `⚙︎` marks measured wall-clock work. On Pi 0.84.4 or newer, the foreground clock runs while Pi works on tracked tasks, including automatic retries, and stops at final settlement. A blocking input dialog pauses work and shows `Waiting for input` until it closes. An ordinary pause between prompts stops work without that label. Elapsed time keeps ticking either way. Historical tasks without observations omit the work clock; time offline is not assigned to work or input wait. This clock does not change the allocated agent time used for `t/s`.
 
 Total tokens use Pi's provider-reported `usage.totalTokens`, which includes input, output, cache-read, and cache-write tokens. Component-aware records without that field sum all four categories; legacy records fall back to input + output. Million-scale widget totals are rounded to one decimal place, while the tool views retain their labeled `tok`/`tok/s` format. Cache hit ratio follows Pi's formula: cache-read tokens divided by all prompt tokens (input + cache-read + cache-write), and appears once the provider reports cache activity. Token rate is calculated as output tokens divided by accumulated active agent-run time. Foreground timing pauses at `agent_end` and resumes at the next `agent_start`, so time spent waiting for the user's next prompt does not dilute throughput; autonomous background subagents remain active from launch through completion. It is a task-wide average, not raw provider inference throughput, and appears once both output usage and a positive active duration are available.
 
 ### Parent totals and usage attribution
 
-Parent rows in the widget, `TaskList`, `TaskGet`, and `/tasks` picker include their own recorded usage **plus every stored descendant**, including hidden, completed, and nested subtasks. Tokens and costs are summed; cache hit ratios and token rates are recomputed from the combined counters and active time, not averaged from displayed percentages or rates. Wall-clock start/end times remain the parent's own execution window. Parent and child rows are inclusive views of the same work—do not add both together to calculate a session total.
+Parent rows in the widget, `TaskList`, `TaskGet`, and `/tasks` picker include their own recorded usage **plus every stored descendant**, including hidden, completed, and nested subtasks. Tokens and costs are summed; cache hit ratios and token rates are recomputed from the combined counters and active time, not averaged from displayed percentages or rates. Wall-clock start/end times remain the parent's own execution window. Work time includes measured foreground spans and tracked background agents from launch through completion. Overlapping work counts only once within that window, and input-wait time is counted only while no part of that task tree is working. Parent and child rows are inclusive views of the same work—do not add both together to calculate a session total.
 
 New foreground usage is allocated once to active leaf tasks (tasks without an active foreground descendant). If several leaves are active, they split tokens, cost, and active time equally, with integer token remainders assigned in task-ID order. This is an allocation rule, not inference about which task an assistant message addressed. Ancestors receive that usage through the rollup rather than a second copy. Background-agent tasks are not charged foreground usage; their separately recorded `metadata.executionStats` contributes to the rollup. Usage from untracked agents is not collected automatically, so missing subagent counters do not mean the work was free.
 
@@ -147,7 +149,7 @@ Blocked by: #13
 Blocks: #13.2
 ```
 
-Shows owner (if set), open (non-completed) dependency edges, execution timing/input/output/total tokens/cache hit ratio/active-time output-token rate/cost when available, and non-empty metadata as JSON.
+Shows owner (if set), open (non-completed) dependency edges, execution timing (including measured work and input wait when available), input/output/total tokens, cache hit ratio, active-time output-token rate, cost, and non-empty metadata as JSON.
 
 ### `TaskUpdate`
 

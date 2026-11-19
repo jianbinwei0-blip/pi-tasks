@@ -1,4 +1,47 @@
-import { isTaskExecutionStats, type Task, type TaskExecutionStats } from "./types.js";
+import {
+  isTaskExecutionStats,
+  type Task,
+  type TaskExecutionStats,
+  type TaskWorkInterval,
+  type TaskWorkPhase,
+  type TaskWorkTiming,
+} from "./types.js";
+
+export interface TaskExecutionReport extends TaskExecutionStats {
+  workDurationMs?: number;
+  inputWaitDurationMs?: number;
+  /** Live only, never persisted. Work in a descendant takes precedence over a wait. */
+  workPhase?: TaskWorkPhase;
+}
+
+/** Include the current span without mutating stored observations. Merge adjacent spans. */
+export function withWorkInterval(
+  timing: TaskWorkTiming | undefined,
+  phase: TaskWorkPhase,
+  startedAt: number,
+  now: number,
+): TaskWorkTiming {
+  if (now <= startedAt) return timing ?? {};
+  const intervals = timing?.[phase] ?? [];
+  const last = intervals.at(-1);
+  if (last && startedAt >= last[0] && startedAt <= last[1]) {
+    return { ...timing, [phase]: [...intervals.slice(0, -1), [last[0], Math.max(now, last[1])]] };
+  }
+  return { ...timing, [phase]: [...intervals, [startedAt, now]] };
+}
+
+function unionDuration(intervals: TaskWorkInterval[], start: number, end: number): number {
+  let duration = 0;
+  let cursor = start;
+  for (const [from, to] of intervals.sort((a, b) => a[0] - b[0])) {
+    const left = Math.max(cursor, from);
+    const right = Math.min(end, to);
+    if (right <= left) continue;
+    duration += right - left;
+    cursor = right;
+  }
+  return duration;
+}
 
 /**
  * Build inclusive reports from task-local counters. Never persist these rollups:
@@ -11,15 +54,18 @@ export function aggregateTaskExecutionStats(
     isTaskExecutionStats(task.metadata.executionStats) ? task.metadata.executionStats : undefined
   ),
   nowMs = Date.now(),
-): Map<string, TaskExecutionStats> {
+  workPhaseForTask: (task: Task) => TaskWorkPhase | undefined = () => undefined,
+): Map<string, TaskExecutionReport> {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const ownStats = new Map(tasks.map(task => [task.id, ownStatsForTask(task)]));
-  const reports = new Map<string, TaskExecutionStats>();
+  const reports = new Map<string, TaskExecutionReport>();
   const legacyRecords = new Map<string, number>();
+  const observedTimes = new Map<string, Record<TaskWorkPhase, TaskWorkInterval[]>>();
 
   for (const task of tasks) {
     const own = ownStats.get(task.id);
     if (!own) continue;
+    const workPhase = workPhaseForTask(task);
     const visited = new Set<string>();
     let target: Task | undefined = task;
     while (target && !visited.has(target.id)) {
@@ -52,9 +98,35 @@ export function aggregateTaskExecutionStats(
       report.totalTokens = (report.totalTokens ?? 0) + (calculateTotalTokens(own) ?? 0);
       const activeDurationMs = own.activeDurationMs ?? own.durationMs ?? (own.completedAt ?? nowMs) - own.startedAt;
       report.activeDurationMs = (report.activeDurationMs ?? 0) + Math.max(0, activeDurationMs);
+      if (own.workTiming) {
+        let timing = observedTimes.get(target.id);
+        if (!timing) {
+          timing = { work: [], inputWait: [] };
+          observedTimes.set(target.id, timing);
+        }
+        for (const phase of ["work", "inputWait"] as const) {
+          for (const interval of own.workTiming[phase] ?? []) timing[phase].push(interval);
+        }
+      }
+      if (workPhase && (!report.workPhase || workPhase === "work")) report.workPhase = workPhase;
       target = target.parentTaskId ? tasksById.get(target.parentTaskId) : undefined;
     }
   }
+
+  for (const [id, { work, inputWait }] of observedTimes) {
+    const report = reports.get(id)!;
+    const { startedAt } = report;
+    const end = Math.min(
+      report.completedAt ?? nowMs,
+      startedAt + (report.durationMs ?? Number.POSITIVE_INFINITY),
+    );
+    report.workDurationMs = unionDuration(work, startedAt, end);
+    if (inputWait.length > 0) {
+      // Count only time blocked on input with no concurrent work in the same task tree.
+      report.inputWaitDurationMs = unionDuration([...work, ...inputWait], startedAt, end) - report.workDurationMs;
+    }
+  }
+
   return reports;
 }
 

@@ -1367,6 +1367,99 @@ describe("TaskWidget", () => {
   });
 });
 
+describe("TaskWidget work timing", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new TaskStore();
+    widget = new TaskWidget(store, {}, true);
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  function start(id: string) {
+    store.update(id, { status: "in_progress" });
+    widget.setActiveTask(id);
+  }
+
+  it("counts overlapping work only once and waits only when the subtree is blocked", () => {
+    store.create("Parent", "Desc");
+    widget.setAgentActive(true);
+    start("1");
+    vi.advanceTimersByTime(10_000);
+    for (const agentId of ["worker-a", "worker-b"]) {
+      const task = store.createSubtask("1", agentId, "Desc", undefined, { agentId });
+      start(task.id);
+    }
+    vi.advanceTimersByTime(10_000);
+    widget.setWaitingForInput(true);
+    vi.advanceTimersByTime(10_000);
+    expect(widget.getExecutionStats().get("1")).toMatchObject({ activeDurationMs: 70_000, workDurationMs: 30_000 });
+    expect(renderWidget(ui.state)[1]).not.toContain("Waiting for input");
+    for (const id of ["1.1", "1.2"]) {
+      store.update(id, { status: "completed" });
+      widget.setActiveTask(id, false);
+    }
+    vi.advanceTimersByTime(10_000);
+    expect(widget.getExecutionStats().get("1")).toMatchObject({ workDurationMs: 30_000, inputWaitDurationMs: 10_000 });
+    expect(renderWidget(ui.state)[1]).toContain("Waiting for input");
+  });
+
+  it("reports wall work for each selected foreground leaf without changing usage allocation", () => {
+    store.create("Parent", "Desc");
+    widget.setAgentActive(true);
+    start("1");
+    for (const label of ["One", "Two"]) start(store.createSubtask("1", label, "Desc").id);
+    vi.advanceTimersByTime(6_000);
+    const stats = widget.getExecutionStats();
+    expect(stats.get("1")).toMatchObject({ workDurationMs: 6_000, activeDurationMs: 6_000 });
+    expect(stats.get("1.1")).toMatchObject({ workDurationMs: 6_000, activeDurationMs: 3_000 });
+    expect(stats.get("1.2")).toMatchObject({ workDurationMs: 6_000, activeDurationMs: 3_000 });
+  });
+
+  it("retains measured spans across widget recreation without counting time offline", () => {
+    store.create("Retained task", "Desc");
+    widget.setAgentActive(true);
+    start("1");
+    vi.advanceTimersByTime(10_000);
+    widget.setWaitingForInput(true);
+    vi.advanceTimersByTime(5_000);
+    widget.dispose();
+    vi.advanceTimersByTime(60_000);
+
+    widget = new TaskWidget(store, {}, true);
+    widget.setUICtx(ui.ctx);
+    widget.update();
+    expect(renderWidget(ui.state)[1]).toContain("Δ1:15 ⚙︎ 0:10");
+    expect(renderWidget(ui.state)[1]).not.toContain("Waiting for input");
+    widget.setAgentActive(true);
+    start("1");
+    vi.advanceTimersByTime(5_000);
+    expect(widget.getExecutionStats().get("1")).toMatchObject({ workDurationMs: 15_000, inputWaitDurationMs: 5_000 });
+  });
+
+  it("does not relabel legacy allocated time as measured work", () => {
+    const completedAt = Date.now();
+    store.create("Legacy task", "Desc", undefined, {
+      executionStats: { startedAt: completedAt - 60_000, completedAt, durationMs: 60_000, activeDurationMs: 15_000, inputTokens: 50, outputTokens: 150 },
+    });
+    store.update("1", { status: "completed" });
+    widget.update();
+    const line = renderWidget(ui.state)[1];
+    expect(line).toContain("Δ1:00");
+    expect(line).toContain("10.0 t/s");
+    expect(line).not.toContain("⚙︎");
+  });
+});
+
 describe("compact duration (via widget rendering)", () => {
   let store: TaskStore;
   let widget: TaskWidget;

@@ -19,6 +19,8 @@ import {
   formatCostUsd,
   formatTokenCount,
   hasLegacyTaskUsage,
+  type TaskExecutionReport,
+  withWorkInterval,
 } from "../task-stats.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
@@ -29,6 +31,8 @@ import {
   type Task,
   type TaskExecutionStats,
   type TaskProgress,
+  type TaskWorkPhase,
+  type TaskWorkTiming,
 } from "../types.js";
 
 // ---- Truncation ----
@@ -145,6 +149,8 @@ export interface TaskMetrics {
   /** Share of foreground agent time allocated to this task (background agents use 1). */
   activityShare: number;
   continuousActivity: boolean;
+  workTiming?: TaskWorkTiming;
+  workSpan?: { phase: TaskWorkPhase; startedAt: number };
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -174,15 +180,16 @@ function formatClockTime(ms: number): string {
 
 function formatWidgetStats(
   theme: Theme,
-  stats: TaskExecutionStats | undefined,
+  stats: TaskExecutionReport | undefined,
   now = Date.now(),
 ): string {
   if (!stats) return "";
 
   const durationMs = stats.durationMs ?? (stats.completedAt ?? now) - stats.startedAt;
-  const timeline = stats.completedAt === undefined
+  let timeline = stats.completedAt === undefined
     ? `${formatClockTime(stats.startedAt)} Δ${formatCompactDuration(durationMs)}`
     : `${formatClockTime(stats.startedAt)} → ${formatClockTime(stats.completedAt)} Δ${formatCompactDuration(durationMs)}`;
+  if (stats.workDurationMs !== undefined) timeline += ` ⚙︎ ${formatCompactDuration(stats.workDurationMs)}`;
 
   const tokenParts: string[] = [];
   if ((stats.inputTokens ?? 0) > 0) tokenParts.push(`↑${formatTokenCount(stats.inputTokens ?? 0)}`);
@@ -266,10 +273,12 @@ export class TaskWidget {
   private uiCtx: UICtx | undefined;
   private widgetFrame = 0;
   private widgetInterval: ReturnType<typeof setInterval> | undefined;
-  /** IDs of tasks currently being actively executed (show spinner). */
+  /** Tasks attached to foreground tracking or launched as background agents. */
   private activeTaskIds = new Set<string>();
-  /** Whether the foreground Pi agent is currently inside an agent run. */
+  /** Whether the foreground Pi agent is currently inside a low-level run. */
   private agentActive = false;
+  /** Logical foreground run state; survives low-level retries and continuations. */
+  private foregroundWorkPhase: TaskWorkPhase | undefined;
   /** Per-task runtime metrics keyed by task ID. */
   private metrics = new Map<string, TaskMetrics>();
   /** Cached TUI instance for requestRender() calls. */
@@ -280,16 +289,25 @@ export class TaskWidget {
   constructor(
     private store: TaskStore,
     private config: TasksConfig = {},
+    private readonly measureWorkTime = false,
   ) {}
 
   setStore(store: TaskStore) {
+    this.flushMetrics();
+    this.store = store;
+  }
+
+  private flushMetrics(onlyIds?: ReadonlySet<string>) {
     const now = Date.now();
     for (const [id, metrics] of this.metrics) {
-      this.pauseMetricsActivity(metrics, now);
-      this.persistMetrics(id, this.store.get(id));
+      if (onlyIds && !onlyIds.has(id)) continue;
+      const task = this.store.get(id);
+      const end = task?.status === "completed" ? task.updatedAt : now;
+      this.pauseMetricsActivity(metrics, end);
+      this.setWorkPhase(metrics, undefined, end);
+      this.persistMetrics(id, task);
     }
     this.activeTaskIds.clear();
-    this.store = store;
   }
 
   setUICtx(ctx: UICtx) {
@@ -321,6 +339,7 @@ export class TaskWidget {
       activeDurationMs: this.initialActiveDurationMs(existingStats, now),
       activityShare: 0,
       continuousActivity: Boolean(task.metadata?.agentId),
+      workTiming: existingStats?.workTiming,
       inputTokens: existingStats?.inputTokens ?? 0,
       outputTokens: existingStats?.outputTokens ?? 0,
       cacheReadTokens: existingStats?.cacheReadTokens ?? 0,
@@ -348,11 +367,24 @@ export class TaskWidget {
     return metrics.activeDurationMs + currentInterval;
   }
 
+  private workTimingThrough(metrics: TaskMetrics, now: number): TaskWorkTiming | undefined {
+    const span = metrics.workSpan;
+    return span ? withWorkInterval(metrics.workTiming, span.phase, span.startedAt, now) : metrics.workTiming;
+  }
+
+  private setWorkPhase(metrics: TaskMetrics, phase: TaskWorkPhase | undefined, now: number) {
+    if (metrics.workSpan?.phase === phase) return;
+    metrics.workTiming = this.workTimingThrough(metrics, now);
+    metrics.workSpan = phase ? { phase, startedAt: now } : undefined;
+  }
+
   private snapshotMetrics(metrics: TaskMetrics, now = Date.now()): TaskExecutionStats {
+    const workTiming = this.workTimingThrough(metrics, now);
     return {
       ...(metrics.usageAttribution ? { usageAttribution: metrics.usageAttribution } : {}),
       startedAt: metrics.startedAt,
       activeDurationMs: this.currentActiveDurationMs(metrics, now),
+      ...(workTiming ? { workTiming } : {}),
       inputTokens: metrics.inputTokens,
       outputTokens: metrics.outputTokens,
       cacheReadTokens: metrics.cacheReadTokens,
@@ -381,7 +413,7 @@ export class TaskWidget {
     this.store.update(taskId, { metadata: { executionStats } });
   }
 
-  /** Reassign active time with the same ownership rule as foreground token usage. */
+  /** Allocate agent time for usage; measure whole observed spans for the work clock. */
   private syncMetricsActivity(tasks = this.store.list(), now = Date.now()) {
     const foreground = new Set(foregroundTaskIds(tasks, this.activeTaskIds));
     for (const task of tasks) {
@@ -391,23 +423,47 @@ export class TaskWidget {
       const active = task.status === "in_progress" && this.activeTaskIds.has(task.id);
       const share = !active ? 0 : metrics.continuousActivity ? 1
         : this.agentActive && foreground.has(task.id) ? 1 / foreground.size : 0;
-      if (metrics.activityShare === share) continue;
-      this.pauseMetricsActivity(metrics, now);
-      metrics.activityShare = share;
-      if (share > 0) this.resumeMetricsActivity(metrics, now);
+      if (metrics.activityShare !== share) {
+        this.pauseMetricsActivity(metrics, now);
+        metrics.activityShare = share;
+        if (share > 0) this.resumeMetricsActivity(metrics, now);
+      }
+      const phase = !this.measureWorkTime || !active ? undefined : metrics.continuousActivity ? "work"
+        : foreground.has(task.id) ? this.foregroundWorkPhase : undefined;
+      this.setWorkPhase(metrics, phase, now);
     }
   }
 
-  /** Mark foreground agent activity so idle waits do not dilute token throughput. */
+  private persistActiveMetrics() {
+    for (const taskId of this.activeTaskIds) {
+      this.persistUnfinishedMetrics(taskId, this.store.get(taskId));
+    }
+  }
+
+  /** Low-level run boundaries still determine allocated time for token throughput. */
   setAgentActive(active: boolean) {
     if (this.agentActive === active) return;
     this.agentActive = active;
+    if (this.measureWorkTime && active) this.foregroundWorkPhase ??= "work";
     this.syncMetricsActivity();
-    if (!active) {
-      for (const taskId of this.activeTaskIds) {
-        this.persistUnfinishedMetrics(taskId, this.store.get(taskId));
-      }
-    }
+    if (!active) this.persistActiveMetrics();
+    this.update();
+  }
+
+  /** Only settlement, not a retry boundary, ends foreground wall-clock work. */
+  setAgentSettled() {
+    if (!this.foregroundWorkPhase) return;
+    this.foregroundWorkPhase = undefined;
+    this.syncMetricsActivity();
+    this.persistActiveMetrics();
+    this.update();
+  }
+
+  setWaitingForInput(waiting: boolean) {
+    const phase = waiting ? "inputWait" : "work";
+    if (!this.foregroundWorkPhase || this.foregroundWorkPhase === phase) return;
+    this.foregroundWorkPhase = phase;
+    this.syncMetricsActivity();
     this.update();
   }
 
@@ -440,12 +496,14 @@ export class TaskWidget {
     if (metrics) {
       const startedAt = existingStats?.startedAt ?? metrics.startedAt;
       const completedAt = existingStats?.completedAt ?? task.updatedAt;
+      const workTiming = this.workTimingThrough(metrics, completedAt);
       const stats: CompletedTaskExecutionStats = {
         ...(metrics.usageAttribution ? { usageAttribution: metrics.usageAttribution } : {}),
         startedAt,
         completedAt,
         durationMs: Math.max(0, completedAt - startedAt),
         activeDurationMs: this.currentActiveDurationMs(metrics, completedAt),
+        ...(workTiming ? { workTiming } : {}),
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
         cacheReadTokens: metrics.cacheReadTokens,
@@ -526,7 +584,10 @@ export class TaskWidget {
       }
       if (task.status !== "in_progress") {
         const metrics = this.metrics.get(id);
-        if (metrics) this.pauseMetricsActivity(metrics, task.updatedAt);
+        if (metrics) {
+          this.pauseMetricsActivity(metrics, task.updatedAt);
+          this.setWorkPhase(metrics, undefined, task.updatedAt);
+        }
         this.activeTaskIds.delete(id);
         this.persistMetrics(id, task);
       }
@@ -568,6 +629,7 @@ export class TaskWidget {
       if (metrics) {
         const stoppedAt = task?.status === "completed" ? task.updatedAt : Date.now();
         this.pauseMetricsActivity(metrics, stoppedAt);
+        this.setWorkPhase(metrics, undefined, stoppedAt);
       }
       this.activeTaskIds.delete(taskId);
       this.persistMetrics(taskId, task);
@@ -621,7 +683,7 @@ export class TaskWidget {
   }
 
   /** Shared live/persisted report for the widget, task tools, and task picker. */
-  getExecutionStats(tasks = this.store.list(), now = Date.now()): Map<string, TaskExecutionStats> {
+  getExecutionStats(tasks = this.store.list(), now = Date.now()): Map<string, TaskExecutionReport> {
     return aggregateTaskExecutionStats(tasks, task => {
       const metrics = task.status === "in_progress" ? this.metrics.get(task.id) : undefined;
       if (metrics) {
@@ -630,7 +692,7 @@ export class TaskWidget {
         return stats;
       }
       return isTaskExecutionStats(task.metadata.executionStats) ? task.metadata.executionStats : undefined;
-    }, now);
+    }, now, task => task.status === "in_progress" ? this.metrics.get(task.id)?.workSpan?.phase : undefined);
   }
 
   /** Build widget lines from current live state. Called from the render callback. */
@@ -667,7 +729,14 @@ export class TaskWidget {
       lines.push(overflowLine);
     }
     for (const { task, depth } of visible) {
-      const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
+      const stats = executionStats.get(task.id);
+      const isActive = task.status === "in_progress" && (
+        this.measureWorkTime ? stats?.workPhase === "work" : this.activeTaskIds.has(task.id)
+      );
+      const waiting = task.status === "in_progress" && stats?.workPhase === "inputWait"
+        ? theme.fg("warning", " › Waiting for input")
+        : "";
+      const timing = formatWidgetStats(theme, stats, now);
       const indent = "  ".repeat(depth + 1);
       const subject = singleLine(task.subject);
       const agentId = task.status === "in_progress" ? task.metadata?.agentId : undefined;
@@ -698,15 +767,12 @@ export class TaskWidget {
       let text: string;
       if (isActive) {
         const form = task.activeForm ? singleLine(task.activeForm) : subject;
-        const stats = formatWidgetStats(theme, executionStats.get(task.id), now);
-        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
+        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${timing}`;
       } else if (task.status === "completed") {
-        const statSuffix = formatWidgetStats(theme, executionStats.get(task.id), now);
-        text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + subject))}${statSuffix}`;
+        text = `${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + subject))}${timing}`;
       } else {
         const agentSuffix = agentLabel ? theme.fg("dim", agentLabel) : "";
-        const stats = formatWidgetStats(theme, executionStats.get(task.id), now);
-        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${subject}${agentSuffix}${stats}`;
+        text = `${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${subject}${agentSuffix}${waiting}${timing}`;
       }
 
       lines.push(truncate(text + suffix));
@@ -738,11 +804,11 @@ export class TaskWidget {
       return;
     }
 
-    // Check if any task needs animation
-    const hasActiveSpinner = tasks.some(t => this.activeTaskIds.has(t.id) && t.status === "in_progress");
-    if (hasActiveSpinner) {
+    // Elapsed time ticks even when the work clock and spinner have paused.
+    const hasLiveTimer = tasks.some(t => this.activeTaskIds.has(t.id) && t.status === "in_progress");
+    if (hasLiveTimer) {
       this.ensureTimer();
-    } else if (!hasActiveSpinner && this.widgetInterval) {
+    } else if (this.widgetInterval) {
       clearInterval(this.widgetInterval);
       this.widgetInterval = undefined;
     }
@@ -763,6 +829,9 @@ export class TaskWidget {
   }
 
   dispose() {
+    if (this.measureWorkTime) this.flushMetrics(this.activeTaskIds);
+    this.foregroundWorkPhase = undefined;
+    this.agentActive = false;
     if (this.widgetInterval) {
       clearInterval(this.widgetInterval);
       this.widgetInterval = undefined;
